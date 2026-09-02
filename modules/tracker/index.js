@@ -416,6 +416,31 @@ function renderBlockContent(block, ui, store, profiles, host) {
     return wrap;
 }
 
+/** One read-only row: a value some other module asked Tracker to track. No inputs, no remove button — the requesting module owns its lifecycle via the handle it got back from track(). */
+function renderQuickRow(entry, host) {
+    const value = signal(host.data.get(`quick:${entry.id}`, ''));
+    const wrap = h('div', { class: 'stme-tracker-quick-row' });
+    onDispose(wrap, host.data.subscribe(MODULE_ID, `quick:${entry.id}`, next => value.set(next ?? '')));
+    wrap.append(
+        h('span', { class: 'stme-tracker-quick-name' }, entry.name),
+        h('code', { class: 'stme-tracker-quick-value' }, value),
+        h('small', { class: 'stme-tracker-quick-owner' }, entry.requesterId),
+    );
+    return wrap;
+}
+
+/** Compact, always read-only — deliberately no editor: these values are provided programmatically by other modules, not configured here. */
+function renderQuickSection(quickIndex, host) {
+    return h('div', { class: 'stme-tracker-quick' },
+        h('div', { class: 'stme-tracker-quick-head' },
+            h('strong', {}, 'Quick tracked values'),
+            h('small', {}, "Requested by other modules via host.services.request('tracker').track() — read-only here."),
+        ),
+        show(computed(() => quickIndex().length === 0), empty => empty ? h('p', { class: 'stme-tracker-empty' }, 'No modules are tracking a quick value yet.') : null),
+        h('div', { class: 'stme-tracker-quick-list' }, list(quickIndex, entry => entry.id, entry => renderQuickRow(entry, host))),
+    );
+}
+
 export const trackerModule = {
     id: 'tracker',
     title: 'Tracker',
@@ -464,6 +489,43 @@ export const trackerModule = {
         };
         host.data.set('publish', publish);
         publish();
+
+        // --- Service: any other module can ask Tracker to track a value for it,
+        // without configuring a block by hand. The REQUESTING module is the
+        // "provider" here — it owns the value and pushes updates via the handle;
+        // Tracker only stores/shows it, read-only, in a compact list (see render()).
+        // A consumer reaches this via the generic registry:
+        //   host.services.request('tracker').track(host.id, key, { name, initial })
+        const quickEntries = new Map(); // entryId -> { requesterId, key, name, unreserve }
+        const publishQuickIndex = () => {
+            host.data.set('quickIndex', [...quickEntries.values()].map(entry => ({ id: `${entry.requesterId}:${entry.key}`, requesterId: entry.requesterId, name: entry.name })));
+        };
+        host.services.register('tracker', {
+            track(requesterId, key, options = {}) {
+                const entryId = `${requesterId}:${key}`;
+                let entry = quickEntries.get(entryId);
+                if (!entry) {
+                    const name = String(options.name ?? key).trim().slice(0, 80) || key;
+                    const reserved = host.data.reserve(`quick:${entryId}`, {
+                        name, schema: { type: 'string' }, persist: true, macro: macroSlug('quick', requesterId, key),
+                    });
+                    entry = { requesterId, key, name, unreserve: reserved.unreserve };
+                    quickEntries.set(entryId, entry);
+                    publishQuickIndex();
+                }
+                if (options.initial !== undefined) host.data.set(`quick:${entryId}`, String(options.initial));
+                return Object.freeze({
+                    set: value => host.data.set(`quick:${entryId}`, String(value ?? '')),
+                    remove: () => {
+                        entry.unreserve();
+                        host.data.remove(`quick:${entryId}`);
+                        quickEntries.delete(entryId);
+                        publishQuickIndex();
+                    },
+                });
+            },
+        });
+        publishQuickIndex();
 
         // --- Floating panel: a separate, draggable, opt-in surface for the tracked
         // fields. It reads only from the bus above, so it structurally cannot leak
@@ -634,6 +696,8 @@ export const trackerModule = {
         const blocks = signal(settings.blocks);
         const hudEnabled = signal(Boolean(settings.hud.enabled));
         const blockUiCache = new Map();
+        const quickIndex = signal(host.data.get('quickIndex', []));
+        onDispose(container, host.data.subscribe(MODULE_ID, 'quickIndex', next => quickIndex.set(next ?? [])));
 
         const persistBlocks = next => {
             blocks.set(next);
@@ -667,6 +731,7 @@ export const trackerModule = {
             show(computed(() => blocks().length === 0), empty => empty ? h('p', { class: 'stme-tracker-empty' }, 'No trackers yet. Add one to start tracking custom state.') : null),
             draggableList,
             Button('+ Add tracker', () => persistBlocks([...blocks.peek(), createBlock()])),
+            renderQuickSection(quickIndex, host),
         );
     },
 
@@ -696,6 +761,16 @@ export const trackerModule = {
         .stme-settings .stme-tracker-current-value { opacity: .85; overflow-wrap: anywhere; }
         .stme-settings .stme-tracker-actions { display: flex; gap: 8px; }
         .stme-settings .stme-tracker-hud-toggle { padding: 8px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: rgba(0, 0, 0, .05); }
+
+        /* Quick tracked values: compact, read-only rows requested by other modules — deliberately no inputs. */
+        .stme-settings .stme-tracker-quick { margin-top: 14px; padding-top: 12px; border-top: 1px dashed color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent); }
+        .stme-settings .stme-tracker-quick-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+        .stme-settings .stme-tracker-quick-head small { opacity: .65; }
+        .stme-settings .stme-tracker-quick-list { display: flex; flex-direction: column; gap: 4px; }
+        .stme-settings .stme-tracker-quick-row { display: grid; grid-template-columns: minmax(90px, .35fr) 1fr auto; gap: 8px; align-items: center; padding: 4px 8px; border-radius: 6px; background: rgba(0, 0, 0, .07); font-size: .9em; }
+        .stme-settings .stme-tracker-quick-name { opacity: .85; overflow-wrap: anywhere; }
+        .stme-settings .stme-tracker-quick-value { font-weight: 600; overflow-wrap: anywhere; }
+        .stme-settings .stme-tracker-quick-owner { opacity: .55; text-align: right; white-space: nowrap; }
 
         /* Floating panel: appended to document.body, not the chat transcript — reads only from the data bus. */
         .stme-tracker-hud { position: fixed; z-index: 5000; width: 260px; max-height: 70vh; display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 70%, var(--SmartThemeBorderColor)); background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, var(--SmartThemeQuoteColor, #8da8ff)); box-shadow: 0 12px 32px rgba(0, 0, 0, .35); backdrop-filter: blur(6px); font-family: var(--mainFontFamily, inherit); color: var(--SmartThemeBodyColor); }
