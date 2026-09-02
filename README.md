@@ -14,6 +14,10 @@ The settings UI is embedded in `index.js`; it does not load a separate `settings
 
 It is a single SillyTavern extension that hosts independently implemented modules under one **ST Module Engine** drawer. Each module has its own lifecycle (`activate`/cleanup), UI renderer, and can be enabled or disabled without unloading the host. Shared host APIs cover native function tools, prompt injection, chat-change notifications, toasts, UI refreshes, and a shared SideCar model.
 
+### Modular UI
+
+The extension UI separates **Base settings** (the shared SideCar profile) from **Modules**. Every module card can be collapsed independently. Drag a module card by its grip to change its order; the order and collapsed states are saved in the engine settings.
+
 ## Included module: Notebook
 
 Notebook is enabled by default. It registers the native `Notebook` function tool with `write` and `update` actions, stores notes per chat, and injects them as private working memory. Its settings and notes are managed in the common engine UI. Disabling the module unregisters its tool and clears its prompt injection.
@@ -66,3 +70,8 @@ The **RP Time** module uses the shared SideCar **Max tokens** sampler setting (i
 ### SideCar sampler
 
 SideCar sampler controls are sliders for temperature, Top P, Top K, Min P, Typical P, repetition/frequency/presence penalties, max tokens, and seed. Standard OpenAI parameters are sent to OpenAI-compatible endpoints; extended parameters are sent when changed for compatible local/proxy endpoints. Unsupported sampler fields may be ignored or rejected by the provider.
+
+
+### SideCar reasoning
+
+For OpenRouter endpoints, the **Reasoning** section exposes provider default/enabled/disabled mode, low/medium/high effort, a reasoning-token budget, and an option to hide reasoning text from the reply. These fields are included only when the endpoint contains `openrouter.ai`; other providers keep their native behaviour.

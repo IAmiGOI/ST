@@ -13,7 +13,8 @@ const SETTINGS_HTML = `
         </div>
         <div class="inline-drawer-content">
             <p class="stme-intro">Independent modules managed from one place.</p>
-            <div id="stme-module-list" class="stme-module-list"></div>
+            <section class="stme-section"><h4>Base settings</h4><div id="stme-base-list" class="stme-base-list"></div></section>
+            <section class="stme-section"><h4>Modules <small>Drag cards to reorder them.</small></h4><div id="stme-module-list" class="stme-module-list"></div></section>
         </div>
     </div>
 </div>`;

@@ -106,53 +106,62 @@ export class ModuleEngine {
         this.refresh();
     }
 
+    layout() {
+        const layout = this.settings().layout ??= { moduleOrder: [], collapsed: {} };
+        layout.moduleOrder ??= [];
+        layout.collapsed ??= {};
+        return layout;
+    }
+
+    orderedModules() {
+        const order = this.layout().moduleOrder;
+        return [...this.#modules.values()].sort((a, b) => {
+            const aIndex = order.indexOf(a.id); const bIndex = order.indexOf(b.id);
+            return (aIndex < 0 ? Number.MAX_SAFE_INTEGER : aIndex) - (bIndex < 0 ? Number.MAX_SAFE_INTEGER : bIndex);
+        });
+    }
+
     refresh() {
         const list = this.#root?.querySelector('#stme-module-list');
-        if (!list) return;
-        list.replaceChildren();
+        const baseList = this.#root?.querySelector('#stme-base-list');
+        if (!list || !baseList) return;
+        list.replaceChildren(); baseList.replaceChildren();
+        const layout = this.layout();
 
-        for (const module of this.#modules.values()) {
+        for (const module of this.orderedModules()) {
             const enabled = this.isEnabled(module.id);
-            const card = document.createElement('section');
-            card.className = 'stme-module';
-            card.dataset.moduleId = module.id;
+            const card = document.createElement('details');
+            card.className = 'stme-module'; card.dataset.moduleId = module.id; card.draggable = true;
+            card.open = !layout.collapsed[module.id];
+            card.addEventListener('toggle', () => { layout.collapsed[module.id] = !card.open; this.saveSettings(); });
+            card.addEventListener('dragstart', event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', module.id); card.classList.add('stme-dragging'); });
+            card.addEventListener('dragend', () => card.classList.remove('stme-dragging'));
 
-            const header = document.createElement('header');
-            header.className = 'stme-module-header';
-            const title = document.createElement('div');
-            title.innerHTML = `<strong>${module.title}</strong><small>${module.description ?? ''}</small>`;
-            const control = document.createElement('label');
-            control.className = 'stme-toggle';
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.checked = enabled;
-            checkbox.addEventListener('change', async () => {
-                checkbox.disabled = true;
-                try {
-                    await this.setEnabled(module.id, checkbox.checked);
-                } catch (error) {
-                    checkbox.checked = !checkbox.checked;
-                    this.#toast('error', error?.message || String(error), module.title);
-                } finally {
-                    checkbox.disabled = false;
-                }
-            });
+            const header = document.createElement('summary'); header.className = 'stme-module-header';
+            const title = document.createElement('div'); title.innerHTML = `<strong>${module.title}</strong><small>${module.description ?? ''}</small>`;
+            const control = document.createElement('label'); control.className = 'stme-toggle';
+            const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = enabled;
+            checkbox.addEventListener('click', event => event.stopPropagation());
+            checkbox.addEventListener('change', async () => { checkbox.disabled = true; try { await this.setEnabled(module.id, checkbox.checked); } catch (error) { checkbox.checked = !checkbox.checked; this.#toast('error', error?.message || String(error), module.title); } finally { checkbox.disabled = false; } });
             control.append(checkbox, document.createTextNode(' Enabled'));
-            header.append(title, control);
-            card.append(header);
-
-            if (enabled) {
-                const content = document.createElement('div');
-                content.className = 'stme-module-content';
-                module.render(content, this.#hostFor(module));
-                card.append(content);
-            }
+            header.append(title, control); card.append(header);
+            if (enabled) { const content = document.createElement('div'); content.className = 'stme-module-content'; module.render(content, this.#hostFor(module)); card.append(content); }
             list.append(card);
         }
 
-        const sidecar = document.createElement('section');
-        list.append(sidecar);
-        this.sidecar.render(sidecar, (level, message, title) => this.#toast(level, message, title));
+        list.ondragover = event => event.preventDefault();
+        list.ondrop = event => {
+            event.preventDefault(); const id = event.dataTransfer.getData('text/plain'); if (!this.#modules.has(id)) return;
+            const target = event.target.closest?.('[data-module-id]'); const order = this.orderedModules().map(module => module.id).filter(item => item !== id);
+            const at = target ? order.indexOf(target.dataset.moduleId) : order.length; order.splice(at < 0 ? order.length : at, 0, id);
+            layout.moduleOrder = order; this.saveSettings(); this.refresh();
+        };
+
+        const baseCard = document.createElement('details'); baseCard.className = 'stme-base-card'; baseCard.open = !layout.collapsed.sidecar;
+        baseCard.addEventListener('toggle', () => { layout.collapsed.sidecar = !baseCard.open; this.saveSettings(); });
+        const baseHeader = document.createElement('summary'); baseHeader.className = 'stme-module-header'; baseHeader.innerHTML = '<div><strong>SideCar</strong><small>Shared model and sampler settings for all modules.</small></div>';
+        const baseContent = document.createElement('div'); baseCard.append(baseHeader, baseContent); baseList.append(baseCard);
+        this.sidecar.render(baseContent, (level, message, title) => this.#toast(level, message, title), false);
     }
 
     #hostFor(module) {

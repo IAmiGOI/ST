@@ -48,3 +48,15 @@ test('SideCar rejects incomplete configuration and empty requests', async () => 
     service.update({ enabled: true, endpoint: 'https://example.test', model: 'small' });
     await assert.rejects(service.request({ prompt: '' }), /requires a prompt/);
 });
+
+test('SideCar sends configured reasoning controls only to OpenRouter endpoints', async () => {
+    const { service } = createService();
+    service.update({ enabled: true, endpoint: 'https://openrouter.ai/api/v1', model: 'reasoner', reasoningMode: 'enabled', reasoningEffort: 'high', reasoningMaxTokens: 512, reasoningExclude: true });
+    const originalFetch = globalThis.fetch;
+    let body;
+    globalThis.fetch = async (_url, options) => { body = JSON.parse(options.body); return { ok: true, json: async () => ({ choices: [{ message: { content: 'OK' } }] }) }; };
+    try {
+        await service.request({ prompt: 'test' });
+        assert.deepEqual(body.reasoning, { enabled: true, effort: 'high', max_tokens: 512, exclude: true });
+    } finally { globalThis.fetch = originalFetch; }
+});
