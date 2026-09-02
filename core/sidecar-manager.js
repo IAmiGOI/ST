@@ -1,4 +1,5 @@
 import { SidecarService } from './sidecar-service.js';
+import { h, list, signal, Button } from './widgets.js';
 
 /** Schedules module requests over several SideCar configurations for lowest queue wait. */
 export class SidecarManager {
@@ -29,5 +30,35 @@ export class SidecarManager {
     #pump() { while (this.#queue.length) { const config = this.#pick(); if (!config) { const item = this.#queue.shift(); item.reject(new Error('No configured SideCar is available.')); continue; } const running = this.#running.get(config.id) ?? 0; if (running > 0) return; const item = this.#queue.shift(); this.#running.set(config.id, running + 1); this.service(config.id).request(item.options).then(item.resolve, item.reject).finally(() => { this.#running.set(config.id, (this.#running.get(config.id) ?? 1) - 1); this.#pump(); }); } }
     remove(id) { if (id === 'primary') return false; const configs = this.configs(); const index = configs.findIndex(item => item.id === id); if (index < 0) return false; configs.splice(index, 1); this.#services.delete(id); this.#running.delete(id); this.#save(); return true; }
     add() { const id = `sidecar_${Date.now().toString(36)}`; const source = this.configs()[0]; this.configs().push({ ...structuredClone(source), id, name: `SideCar ${this.configs().length + 1}` }); this.#save(); return id; }
-    render(container, toast) { container.className = 'stme-sidecar-manager'; container.replaceChildren(); const header = document.createElement('div'); header.className = 'stme-sidecar-manager-head'; header.innerHTML = '<div><strong>SideCar Manager</strong><small>Requests are sent to the first free SideCar; queued work is balanced for minimum total wait.</small></div>'; const add = document.createElement('button'); add.className = 'menu_button'; add.type = 'button'; add.textContent = '+ SideCar'; add.addEventListener('click', () => { this.add(); this.render(container, toast); }); header.append(add); container.append(header); for (const config of this.configs()) { const card = document.createElement('details'); card.className = 'stme-sidecar-worker'; card.open = true; const summary = document.createElement('summary'); const title = document.createElement('span'); title.textContent = config.name; summary.append(title); if (config.id !== 'primary') { const remove = document.createElement('button'); remove.className = 'menu_button stme-worker-remove'; remove.type = 'button'; remove.textContent = 'Remove'; remove.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); this.remove(config.id); this.render(container, toast); }); summary.append(remove); } const content = document.createElement('div'); card.append(summary, content); container.append(card); this.service(config.id).render(content, toast, false); } }
+    /**
+     * Builds the manager UI once. Each worker's own SideCar form is built once too
+     * (via list()'s keyed reuse) — adding or removing a worker only touches that one
+     * card, so an in-progress edit on another worker's form is never discarded.
+     */
+    render(container, toast) {
+        container.className = 'stme-sidecar-manager';
+        const configsSig = signal(this.configs());
+
+        const header = h('div', { class: 'stme-sidecar-manager-head' },
+            h('div', {}, h('strong', {}, 'SideCar Manager'), h('small', {}, 'Requests are sent to the first free SideCar; queued work is balanced for minimum total wait.')),
+            Button('+ SideCar', () => { this.add(); configsSig.set(this.configs()); }),
+        );
+
+        const workers = list(configsSig, config => config.id, config => {
+            const summary = h('summary', {}, h('span', {}, config.name));
+            if (config.id !== 'primary') {
+                summary.append(Button('Remove', event => {
+                    event.preventDefault(); event.stopPropagation();
+                    this.remove(config.id);
+                    configsSig.set(this.configs());
+                }, { variant: 'danger' }));
+            }
+            const content = h('div', {});
+            this.service(config.id).render(content, toast, false);
+            const card = h('details', { class: 'stme-sidecar-worker', open: true }, summary, content);
+            return card;
+        });
+
+        container.replaceChildren(header, workers);
+    }
 }

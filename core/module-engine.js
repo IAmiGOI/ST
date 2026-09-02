@@ -1,11 +1,18 @@
 import { SidecarManager } from './sidecar-manager.js';
 import { ModuleDataBus } from './data-bus.js';
+import { h, show, signal, computed, effectOn, Button, TextInput, Toggle, DraggableList } from './widgets.js';
 
 const SETTINGS_KEY = 'st_module_engine';
 
 /**
  * Lifecycle host for feature modules. A module only knows the small host API
  * passed to activate(), so it can be developed and enabled independently.
+ *
+ * UI is reactive: a module's `render()` runs exactly once per enable — never
+ * again just because something else on the page changed. Cards and their
+ * content divs are created once and kept alive across reorders/collapses;
+ * `host.refresh()` still exists as an escape hatch, but now only remounts the
+ * calling module's own content, never its siblings.
  */
 export class ModuleEngine {
     #modules = new Map();
@@ -13,14 +20,31 @@ export class ModuleEngine {
     #subscriptions = [];
     #chatListeners = new Set();
     #root;
-    #failures = new Map();
     #logs = [];
     #data = new ModuleDataBus();
     #moduleStyles = new Map();
 
+    #registeredIds = signal([]);
+    #layoutVersion = signal(0);
+    #enabledMap = signal({});
+    #errorMap = signal({});
+    #forceTicks = new Map();
+    #orderedSignal;
+
     constructor(getContext) {
         this.getContext = getContext;
         this.sidecar = new SidecarManager(() => this.settings(), () => this.saveSettings());
+        this.#orderedSignal = computed(() => {
+            this.#layoutVersion();
+            const order = this.layout().moduleOrder;
+            return [...this.#registeredIds()]
+                .map(id => this.#modules.get(id))
+                .filter(Boolean)
+                .sort((a, b) => {
+                    const ai = order.indexOf(a.id); const bi = order.indexOf(b.id);
+                    return (ai < 0 ? Number.MAX_SAFE_INTEGER : ai) - (bi < 0 ? Number.MAX_SAFE_INTEGER : bi);
+                });
+        });
     }
 
     register(module) {
@@ -35,6 +59,8 @@ export class ModuleEngine {
         }
         this.#modules.set(module.id, module);
         this.#installModuleCss(module);
+        this.#forceTicks.set(module.id, signal(0));
+        this.#registeredIds.update(ids => [...ids, module.id]);
         return this;
     }
 
@@ -72,10 +98,10 @@ export class ModuleEngine {
 
         const context = this.getContext();
         if (context.eventTypes?.CHAT_CHANGED && context.eventSource?.on) {
-            const handler = () => {
-                for (const listener of this.#chatListeners) listener();
-                this.refresh();
-            };
+            // Modules that care about the current chat subscribe themselves via
+            // onChatChanged() and update their own signals — no engine-wide
+            // rebuild needed here any more.
+            const handler = () => { for (const listener of this.#chatListeners) listener(); };
             context.eventSource.on(context.eventTypes.CHAT_CHANGED, handler);
             this.#subscriptions.push(() => context.eventSource.off?.(context.eventTypes.CHAT_CHANGED, handler));
         }
@@ -89,13 +115,13 @@ export class ModuleEngine {
         try {
             const cleanup = await module.activate(this.#hostFor(module));
             this.#active.set(id, typeof cleanup === 'function' ? cleanup : () => {});
-            this.#failures.delete(id);
+            this.#errorMap.update(map => { if (!(id in map)) return map; const next = { ...map }; delete next[id]; return next; });
             this.#log('info', id, 'Module started.');
         } catch (error) {
-            this.#failures.set(id, error);
+            this.#errorMap.update(map => ({ ...map, [id]: error }));
             this.#log('error', id, `Start failed: ${error?.message || String(error)}`, error);
         }
-        this.refresh();
+        this.#enabledMap.update(map => ({ ...map, [id]: true }));
     }
 
     async disable(id) {
@@ -103,20 +129,15 @@ export class ModuleEngine {
         if (!cleanup) return;
         await cleanup();
         this.#active.delete(id);
-        this.refresh();
+        this.#enabledMap.update(map => ({ ...map, [id]: false }));
+        this.#errorMap.update(map => { if (!(id in map)) return map; const next = { ...map }; delete next[id]; return next; });
     }
 
     async setEnabled(id, enabled) {
         if (!this.#modules.has(id)) throw new Error(`Unknown module: ${id}`);
         this.settings().modules[id] = { ...this.settings().modules[id], enabled };
         this.saveSettings();
-        if (enabled) await this.enable(id);
-        else await this.disable(id);
-    }
-
-    mount(root) {
-        this.#root = root;
-        this.refresh();
+        if (enabled) await this.enable(id); else await this.disable(id);
     }
 
     layout() {
@@ -127,57 +148,97 @@ export class ModuleEngine {
     }
 
     orderedModules() {
-        const order = this.layout().moduleOrder;
-        return [...this.#modules.values()].sort((a, b) => {
-            const aIndex = order.indexOf(a.id); const bIndex = order.indexOf(b.id);
-            return (aIndex < 0 ? Number.MAX_SAFE_INTEGER : aIndex) - (bIndex < 0 ? Number.MAX_SAFE_INTEGER : bIndex);
+        return this.#orderedSignal();
+    }
+
+    /** Builds the whole reactive UI tree once. Cards persist for the life of the page from here on. */
+    mount(root) {
+        this.#root = root;
+        const moduleList = root.querySelector('#stme-module-list');
+        const baseList = root.querySelector('#stme-base-list');
+        if (!moduleList || !baseList) return;
+
+        moduleList.append(DraggableList(this.#orderedSignal, module => module.id, {
+            isOpen: module => !this.layout().collapsed[module.id],
+            onToggleOpen: (module, open) => { this.layout().collapsed[module.id] = !open; this.saveSettings(); },
+            onReorder: modules => {
+                this.layout().moduleOrder = modules.map(module => module.id);
+                this.saveSettings();
+                this.#layoutVersion.update(v => v + 1);
+            },
+            renderHeader: module => this.#renderModuleHeader(module),
+            renderContent: module => this.#renderModuleBody(module),
+        }));
+
+        const sidecarCard = h('details', { class: 'stme-base-card', open: !this.layout().collapsed.sidecar });
+        sidecarCard.addEventListener('toggle', () => { this.layout().collapsed.sidecar = !sidecarCard.open; this.saveSettings(); });
+        const sidecarHeader = h('summary', { class: 'stme-module-header' },
+            h('div', {}, h('strong', {}, 'SideCar Manager'), h('small', {}, 'Balanced shared model workers and profiles for all modules.')));
+        const sidecarContent = h('div', {});
+        sidecarCard.append(sidecarHeader, sidecarContent);
+        this.sidecar.render(sidecarContent, (level, message, title) => this.#toast(level, message, title));
+        baseList.append(sidecarCard);
+
+        baseList.append(this.#renderModuleLoader());
+    }
+
+    #renderModuleHeader(module) {
+        const enabledDisplay = computed(() => this.#enabledMap()[module.id] ?? false);
+        return [
+            h('div', {}, h('strong', {}, module.title), h('small', {}, module.description ?? '')),
+            Toggle('Enabled', enabledDisplay, {
+                onChange: async (checked, input) => {
+                    input.disabled = true;
+                    try { await this.setEnabled(module.id, checked); }
+                    catch (error) { input.checked = !checked; this.#toast('error', error?.message || String(error), module.title); }
+                    finally { input.disabled = false; }
+                },
+            }),
+        ];
+    }
+
+    /** Reactively swaps between "nothing" / an error card / the module's own once-rendered content. */
+    #renderModuleBody(module) {
+        const stateKey = computed(() => {
+            const tick = this.#forceTicks.get(module.id)();
+            const error = this.#errorMap()[module.id];
+            const enabled = this.#enabledMap()[module.id];
+            const state = error ? 'error' : enabled ? 'enabled' : 'disabled';
+            return `${state}#${tick}`;
+        });
+        return show(stateKey, key => {
+            const state = key.split('#')[0];
+            if (state === 'disabled') return null;
+            if (state === 'error') return this.#renderErrorCard(module, this.#errorMap()[module.id]);
+            const body = h('div', {});
+            try {
+                module.render(body, this.#hostFor(module));
+            } catch (renderError) {
+                this.#log('error', module.id, `UI render failed: ${renderError?.message || String(renderError)}`, renderError);
+                body.replaceChildren();
+                body.classList.add('stme-module-error');
+                body.textContent = `Module UI failed: ${renderError?.message || String(renderError)}`;
+                queueMicrotask(() => this.#errorMap.update(map => ({ ...map, [module.id]: renderError })));
+            }
+            return body;
         });
     }
 
-    refresh() {
-        const list = this.#root?.querySelector('#stme-module-list');
-        const baseList = this.#root?.querySelector('#stme-base-list');
-        if (!list || !baseList) return;
-        list.replaceChildren(); baseList.replaceChildren();
-        const layout = this.layout();
+    #renderErrorCard(module, error) {
+        return h('div', { class: 'stme-module-error' },
+            `Module did not start: ${error?.message || String(error)}`,
+            Button('Retry module', () => this.#retryModule(module)),
+        );
+    }
 
-        for (const module of this.orderedModules()) {
-            const enabled = this.isEnabled(module.id);
-            const failure = this.#failures.get(module.id);
-            const card = document.createElement('details');
-            card.className = 'stme-module'; card.dataset.moduleId = module.id; card.draggable = true;
-            card.open = !layout.collapsed[module.id];
-            card.addEventListener('toggle', () => { layout.collapsed[module.id] = !card.open; this.saveSettings(); });
-            card.addEventListener('dragstart', event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', module.id); card.classList.add('stme-dragging'); });
-            card.addEventListener('dragend', () => card.classList.remove('stme-dragging'));
-
-            const header = document.createElement('summary'); header.className = 'stme-module-header';
-            const title = document.createElement('div'); title.innerHTML = `<strong>${module.title}</strong><small>${module.description ?? ''}</small>`;
-            const control = document.createElement('label'); control.className = 'stme-toggle';
-            const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = enabled;
-            checkbox.addEventListener('click', event => event.stopPropagation());
-            checkbox.addEventListener('change', async () => { checkbox.disabled = true; try { await this.setEnabled(module.id, checkbox.checked); } catch (error) { checkbox.checked = !checkbox.checked; this.#toast('error', error?.message || String(error), module.title); } finally { checkbox.disabled = false; } });
-            control.append(checkbox, document.createTextNode(' Enabled'));
-            header.append(title, control); card.append(header);
-            if (failure) { const content = document.createElement('div'); content.className = 'stme-module-content stme-module-error'; content.textContent = `Module did not start: ${failure?.message || String(failure)}`; const retry = document.createElement('button'); retry.className = 'menu_button'; retry.type = 'button'; retry.textContent = 'Retry module'; retry.addEventListener('click', () => { this.#failures.delete(module.id); this.enable(module.id); }); content.append(retry); card.append(content); }
-            else if (enabled) { const content = document.createElement('div'); content.className = 'stme-module-content'; try { module.render(content, this.#hostFor(module)); } catch (error) { this.#failures.set(module.id, error); this.#log('error', module.id, `UI render failed: ${error?.message || String(error)}`, error); content.replaceChildren(); content.classList.add('stme-module-error'); content.textContent = `Module UI failed: ${error?.message || String(error)}`; } card.append(content); }
-            list.append(card);
+    #retryModule(module) {
+        if (this.#active.has(module.id)) {
+            // activate() already succeeded — only render() failed. Clearing the error
+            // alone flips #renderModuleBody back to "enabled", which re-attempts render().
+            this.#errorMap.update(map => { const next = { ...map }; delete next[module.id]; return next; });
+            return;
         }
-
-        list.ondragover = event => event.preventDefault();
-        list.ondrop = event => {
-            event.preventDefault(); const id = event.dataTransfer.getData('text/plain'); if (!this.#modules.has(id)) return;
-            const target = event.target.closest?.('[data-module-id]'); const order = this.orderedModules().map(module => module.id).filter(item => item !== id);
-            const at = target ? order.indexOf(target.dataset.moduleId) : order.length; order.splice(at < 0 ? order.length : at, 0, id);
-            layout.moduleOrder = order; this.saveSettings(); this.refresh();
-        };
-
-        const baseCard = document.createElement('details'); baseCard.className = 'stme-base-card'; baseCard.open = !layout.collapsed.sidecar;
-        baseCard.addEventListener('toggle', () => { layout.collapsed.sidecar = !baseCard.open; this.saveSettings(); });
-        const baseHeader = document.createElement('summary'); baseHeader.className = 'stme-module-header'; baseHeader.innerHTML = '<div><strong>SideCar Manager</strong><small>Balanced shared model workers and profiles for all modules.</small></div>';
-        const baseContent = document.createElement('div'); baseCard.append(baseHeader, baseContent); baseList.append(baseCard);
-        this.sidecar.render(baseContent, (level, message, title) => this.#toast(level, message, title));
-        this.#renderModuleLoader(baseList);
+        this.enable(module.id);
     }
 
     async #loadRemoteModule(url) {
@@ -189,21 +250,35 @@ export class ModuleEngine {
         try { const imported = await import(blob); const module = imported.default ?? imported.module; this.register(module); await this.enable(module.id); } finally { URL.revokeObjectURL(blob); }
     }
 
-    #renderModuleLoader(container) {
-        const card = document.createElement('details'); card.className = 'stme-base-card';
-        const summary = document.createElement('summary'); summary.className = 'stme-module-header'; summary.innerHTML = '<div><strong>Module loader</strong><small>Load a self-contained module from a GitHub raw URL.</small></div>';
-        const content = document.createElement('div'); content.className = 'stme-module-content stme-loader';
-        content.innerHTML = '<input class="text_pole" type="url" placeholder="https://raw.githubusercontent.com/user/repo/main/module.js"><button class="menu_button" type="button">Load module</button>';
-        const input = content.querySelector('input'); const button = content.querySelector('button');
-        button.addEventListener('click', async () => { button.disabled = true; try { await this.#loadRemoteModule(input.value); this.#toast('success', 'Module loaded.', 'ST Module Engine'); this.refresh(); } catch (error) { this.#log('error', 'loader', error?.message || String(error), error); this.#toast('error', error?.message || String(error), 'Module loader'); } finally { button.disabled = false; } });
-        card.append(summary, content); container.append(card);
+    #renderModuleLoader() {
+        const url = signal('');
+        const busy = signal(false);
+        const card = h('details', { class: 'stme-base-card' });
+        const header = h('summary', { class: 'stme-module-header' },
+            h('div', {}, h('strong', {}, 'Module loader'), h('small', {}, 'Load a self-contained module from a GitHub raw URL.')));
+        const content = h('div', { class: 'stme-module-content stme-loader' },
+            TextInput(url, { type: 'url', placeholder: 'https://raw.githubusercontent.com/user/repo/main/module.js' }),
+            Button('Load module', async () => {
+                busy.set(true);
+                try {
+                    await this.#loadRemoteModule(url.peek());
+                    this.#toast('success', 'Module loaded.', 'ST Module Engine');
+                } catch (error) {
+                    this.#log('error', 'loader', error?.message || String(error), error);
+                    this.#toast('error', error?.message || String(error), 'Module loader');
+                } finally { busy.set(false); }
+            }),
+        );
+        effectOn(content, () => { content.querySelector('button').disabled = busy(); });
+        card.append(header, content);
+        return card;
     }
 
     #hostFor(module) {
         return {
             id: module.id,
             context: () => this.getContext(),
-            refresh: () => this.refresh(),
+            refresh: () => { this.#forceTicks.get(module.id)?.update(n => n + 1); },
             setPrompt: (key, prompt, position = 1, depth = 4, role = 0) => this.getContext().setExtensionPrompt(key, prompt, position, depth, false, role),
             registerTool: (definition) => {
                 const context = this.getContext();

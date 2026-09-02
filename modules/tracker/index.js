@@ -1,4 +1,8 @@
 import { createTrackerStore } from './store.js';
+import {
+    h, list, show, signal, computed, onDispose, effectOn,
+    Field, TextInput, TextArea, Select, Toggle, Button, Chip, DraggableList,
+} from '../../core/widgets.js';
 
 const MODULE_ID = 'tracker';
 const TRACKER_EXTRA_KEY = 'stme_tracker_snapshot';
@@ -264,207 +268,185 @@ function makeHudDraggable(panel, host) {
     };
 }
 
-function renderFieldRow(block, field, host) {
-    const row = document.createElement('div');
-    row.className = 'stme-tracker-field-row';
-    row.innerHTML = `
-        <code class="stme-tracker-field-name"></code>
-        <input class="text_pole stme-tracker-field-instruction" type="text" maxlength="${MAX_INSTRUCTION_LENGTH}" placeholder="How should SideCar decide it? (optional)">
-        <button class="menu_button stme-worker-remove" type="button" title="Remove field">×</button>
-    `;
-    row.querySelector('.stme-tracker-field-name').textContent = field.name;
-    const instructionInput = row.querySelector('.stme-tracker-field-instruction');
-    instructionInput.value = field.instruction;
-    instructionInput.addEventListener('change', () => {
-        field.instruction = instructionInput.value.trim().slice(0, MAX_INSTRUCTION_LENGTH);
-        host.saveModuleSettings();
-    });
-    row.querySelector('.stme-worker-remove').addEventListener('click', () => {
-        block.fields = block.fields.filter(item => item !== field);
-        host.saveModuleSettings();
-        host.data.get('publish')?.();
-        host.refresh();
-    });
-    return row;
+/**
+ * Per-block reactive state, cached for the life of the render() call so the
+ * card built for a block id is never rebuilt — only these signals change, and
+ * only the DOM that reads them patches. `renderHeader`/`renderContent` share
+ * one entry per block since DraggableList calls both for the same item.
+ */
+function getBlockUi(cache, block) {
+    if (!cache.has(block.id)) {
+        cache.set(block.id, {
+            title: signal(block.title),
+            enabled: signal(block.enabled !== false),
+            fields: signal(sanitizeFields(block.fields)),
+            sidecarProfile: signal(block.sidecarProfile),
+            systemPromptTemplate: signal(block.systemPromptTemplate),
+            promptTemplate: signal(block.promptTemplate),
+            displayTemplate: signal(block.displayTemplate),
+        });
+    }
+    return cache.get(block.id);
 }
 
-function renderBlockContent(block, store, profiles, host) {
-    const wrap = document.createElement('div');
-    wrap.className = 'stme-tracker-block';
-    wrap.innerHTML = `
-        <div class="stme-tracker-fields">
-            <span class="stme-tracker-fields-label">Tracked fields <small>Each field becomes one JSON key SideCar must fill in; the note tells it how.</small></span>
-            <div class="stme-tracker-field-list"></div>
-            <div class="stme-tracker-field-add">
-                <input class="text_pole" data-field="name" placeholder="Field name (e.g. health)" maxlength="${MAX_FIELD_NAME_LENGTH}">
-                <input class="text_pole" data-field="instruction" placeholder="How should SideCar decide it? (optional)" maxlength="${MAX_INSTRUCTION_LENGTH}">
-                <button class="menu_button" type="button" data-action="add-field"><i class="fa-solid fa-plus"></i> Add field</button>
-            </div>
-        </div>
-        <label>SideCar profile <select class="text_pole" data-field="sidecarProfile"></select></label>
-        <details class="stme-sampler">
-            <summary>Prompt templates <small>Advanced — placeholders: {fields}, {fieldsJson}, {current}, {context}</small></summary>
-            <div class="stme-tracker-templates">
-                <label>System prompt <textarea class="text_pole" data-field="systemPromptTemplate" rows="4"></textarea></label>
-                <label>User prompt <textarea class="text_pole" data-field="promptTemplate" rows="3"></textarea></label>
-            </div>
-        </details>
-        <div class="stme-tracker-display">
-            <div class="stme-tracker-display-head">
-                <strong>Display template</strong>
-                <small>Optional — leave empty for an automatic "name: value" list. Click a token to insert its address.</small>
-            </div>
-            <input class="text_pole" data-field="displayTemplate" placeholder="&#10084; {health} &middot; &#128205; {location}">
-            <div class="stme-tracker-tokens"></div>
-        </div>
-        <div class="stme-tracker-current"><strong>Current state</strong><span class="stme-tracker-current-value"></span></div>
-        <div class="stme-tracker-actions">
-            <button class="menu_button" data-action="save" type="button">Save tracker</button>
-            <button class="menu_button" data-action="reset" type="button">Reset tracked state</button>
-        </div>
-    `;
+function renderFieldRow(block, field, ui, host) {
+    const instruction = signal(field.instruction);
+    const input = TextInput(instruction, { maxlength: MAX_INSTRUCTION_LENGTH, placeholder: 'How should SideCar decide it? (optional)' });
+    input.addEventListener('change', () => {
+        field.instruction = instruction.peek().trim().slice(0, MAX_INSTRUCTION_LENGTH);
+        instruction.set(field.instruction);
+        host.saveModuleSettings();
+    });
+    return h('div', { class: 'stme-tracker-field-row' },
+        h('code', { class: 'stme-tracker-field-name' }, field.name),
+        input,
+        Button('×', () => {
+            const next = ui.fields.peek().filter(item => item !== field);
+            block.fields = next;
+            ui.fields.set(next);
+            host.saveModuleSettings();
+            host.data.get('publish')?.();
+        }, { variant: 'danger' }),
+    );
+}
 
-    const fieldList = wrap.querySelector('.stme-tracker-field-list');
-    if (!block.fields.length) {
-        const empty = document.createElement('p');
-        empty.className = 'stme-tracker-empty';
-        empty.textContent = 'No fields yet — add one below.';
-        fieldList.append(empty);
-    } else {
-        for (const field of block.fields) fieldList.append(renderFieldRow(block, field, host));
-    }
-
-    const nameInput = wrap.querySelector('[data-field="name"]');
-    const instructionInput = wrap.querySelector('[data-field="instruction"]');
-    const addField = () => {
-        const name = normalizeFieldName(nameInput.value);
-        if (!name) { host.toast('warning', 'Enter a field name first.', block.title); return; }
-        if (block.fields.some(item => item.name === name)) { host.toast('warning', `Field "${name}" already exists.`, block.title); return; }
-        block.fields = [...block.fields, { name, instruction: String(instructionInput.value ?? '').trim().slice(0, MAX_INSTRUCTION_LENGTH) }];
+function renderBlockHeader(block, ui, blocks, persistBlocks, profiles, host) {
+    const titleInput = TextInput(ui.title, { maxlength: 60, placeholder: 'Tracker title' });
+    titleInput.addEventListener('click', event => event.stopPropagation());
+    titleInput.addEventListener('change', () => {
+        block.title = ui.title.peek().trim() || 'Tracker';
+        ui.title.set(block.title);
         host.saveModuleSettings();
         host.data.get('publish')?.();
-        host.refresh();
+    });
+
+    const caption = computed(() => {
+        const fields = ui.fields();
+        const profileName = profiles().find(item => item.id === ui.sidecarProfile())?.name ?? ui.sidecarProfile();
+        return `${fields.length} field${fields.length === 1 ? '' : 's'} · profile: ${profileName}`;
+    });
+
+    return [
+        h('div', { class: 'stme-tracker-title' }, titleInput, h('small', {}, caption)),
+        Toggle('Enabled', ui.enabled, {
+            onChange: checked => {
+                block.enabled = checked;
+                ui.enabled.set(checked);
+                host.saveModuleSettings();
+                host.data.get('publish')?.();
+            },
+        }),
+        Button('Remove', event => {
+            event.preventDefault(); event.stopPropagation();
+            persistBlocks(blocks.peek().filter(item => item.id !== block.id));
+            host.data.remove(`block:${block.id}`);
+        }, { variant: 'danger' }),
+    ];
+}
+
+function renderBlockContent(block, ui, store, profiles, host) {
+    const wrap = h('div', { class: 'stme-tracker-block' });
+
+    const nameInput = signal('');
+    const instructionInput = signal('');
+    const addField = () => {
+        const name = normalizeFieldName(nameInput.peek());
+        if (!name) { host.toast('warning', 'Enter a field name first.', block.title); return; }
+        if (ui.fields.peek().some(item => item.name === name)) { host.toast('warning', `Field "${name}" already exists.`, block.title); return; }
+        const next = [...ui.fields.peek(), { name, instruction: instructionInput.peek().trim().slice(0, MAX_INSTRUCTION_LENGTH) }];
+        block.fields = next;
+        ui.fields.set(next);
+        nameInput.set(''); instructionInput.set('');
+        host.saveModuleSettings();
+        host.data.get('publish')?.();
     };
-    wrap.querySelector('[data-action="add-field"]').addEventListener('click', addField);
-    for (const input of [nameInput, instructionInput]) {
+    const nameField = TextInput(nameInput, { placeholder: 'Field name (e.g. health)', maxlength: MAX_FIELD_NAME_LENGTH });
+    const instructionField = TextInput(instructionInput, { placeholder: 'How should SideCar decide it? (optional)', maxlength: MAX_INSTRUCTION_LENGTH });
+    for (const input of [nameField, instructionField]) {
         input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); addField(); } });
     }
 
-    const select = wrap.querySelector('[data-field="sidecarProfile"]');
-    for (const profile of profiles) {
-        const option = new Option(profile.name, profile.id);
-        option.selected = profile.id === block.sidecarProfile;
-        select.add(option);
-    }
+    const fieldsSection = h('div', { class: 'stme-tracker-fields' },
+        h('span', { class: 'stme-tracker-fields-label' }, 'Tracked fields', h('small', {}, "Each field becomes one JSON key SideCar must fill in; the note tells it how.")),
+        show(computed(() => ui.fields().length === 0), empty => empty ? h('p', { class: 'stme-tracker-empty' }, 'No fields yet — add one below.') : null),
+        h('div', { class: 'stme-tracker-field-list' }, list(ui.fields, field => field.name, field => renderFieldRow(block, field, ui, host))),
+        h('div', { class: 'stme-tracker-field-add' }, nameField, instructionField, Button('+ Add field', addField)),
+    );
 
-    wrap.querySelector('[data-field="systemPromptTemplate"]').value = block.systemPromptTemplate;
-    wrap.querySelector('[data-field="promptTemplate"]').value = block.promptTemplate;
+    const profileSelect = Select(ui.sidecarProfile, profiles);
+    const systemPromptArea = TextArea(ui.systemPromptTemplate, { rows: 4 });
+    const promptArea = TextArea(ui.promptTemplate, { rows: 3 });
+    const displayInput = TextInput(ui.displayTemplate, { placeholder: '❤ {health} · 📍 {location}' });
 
-    const fieldNames = sanitizeFields(block.fields).map(field => field.name);
+    const tokens = h('div', { class: 'stme-tracker-tokens' },
+        show(computed(() => ui.fields().length === 0), empty => empty ? h('span', { class: 'stme-tracker-empty' }, 'Add fields above to get insertable tokens.') : null),
+        list(ui.fields, field => field.name, field => Chip(
+            [h('span', {}, field.name), h('code', {}, `{${field.name}}`)],
+            {
+                title: `Insert {${field.name}} — this field's address in the template.`,
+                onClick: () => {
+                    const start = displayInput.selectionStart ?? displayInput.value.length;
+                    const end = displayInput.selectionEnd ?? displayInput.value.length;
+                    const insert = `{${field.name}}`;
+                    const next = displayInput.value.slice(0, start) + insert + displayInput.value.slice(end);
+                    displayInput.value = next;
+                    ui.displayTemplate.set(next);
+                    displayInput.focus();
+                    const caret = start + insert.length;
+                    displayInput.setSelectionRange(caret, caret);
+                },
+            },
+        )),
+    );
 
-    const displayInput = wrap.querySelector('[data-field="displayTemplate"]');
-    displayInput.value = block.displayTemplate;
-    const tokens = wrap.querySelector('.stme-tracker-tokens');
-    if (!fieldNames.length) {
-        const hint = document.createElement('span');
-        hint.className = 'stme-tracker-empty';
-        hint.textContent = 'Add fields above to get insertable tokens.';
-        tokens.append(hint);
-    } else {
-        for (const name of fieldNames) {
-            const token = document.createElement('button');
-            token.type = 'button';
-            token.className = 'stme-tracker-token';
-            token.title = `Insert {${name}} — this field's address in the template.`;
-            token.innerHTML = `<span class="stme-tracker-token-name"></span><code>{${name}}</code>`;
-            token.querySelector('.stme-tracker-token-name').textContent = name;
-            token.addEventListener('click', () => {
-                const start = displayInput.selectionStart ?? displayInput.value.length;
-                const end = displayInput.selectionEnd ?? displayInput.value.length;
-                const insert = `{${name}}`;
-                displayInput.value = displayInput.value.slice(0, start) + insert + displayInput.value.slice(end);
-                displayInput.focus();
-                const caret = start + insert.length;
-                displayInput.setSelectionRange(caret, caret);
-            });
-            tokens.append(token);
-        }
-    }
-
-    const currentState = store.get(block.id);
-    wrap.querySelector('.stme-tracker-current-value').textContent = fieldNames.length
-        ? (buildLabel(currentState, fieldNames, block.displayTemplate) || '(no data yet)')
-        : '(no fields configured)';
-
-    wrap.querySelector('[data-action="save"]').addEventListener('click', () => {
-        block.sidecarProfile = select.value;
-        block.systemPromptTemplate = String(wrap.querySelector('[data-field="systemPromptTemplate"]').value).trim() || DEFAULT_SYSTEM_PROMPT;
-        block.promptTemplate = String(wrap.querySelector('[data-field="promptTemplate"]').value).trim() || DEFAULT_PROMPT;
-        block.displayTemplate = String(wrap.querySelector('[data-field="displayTemplate"]').value).trim();
-        host.saveModuleSettings();
-        host.data.get('publish')?.();
-        host.toast('success', `"${block.title}" saved.`, 'Tracker');
-        host.refresh();
+    const currentState = signal(store.get(block.id));
+    onDispose(wrap, host.data.subscribe(MODULE_ID, `block:${block.id}`, entry => currentState.set(entry?.state ?? {})));
+    const currentLabel = computed(() => {
+        const fieldNames = ui.fields().map(field => field.name);
+        return fieldNames.length ? (buildLabel(currentState(), fieldNames, ui.displayTemplate()) || '(no data yet)') : '(no fields configured)';
     });
 
-    wrap.querySelector('[data-action="reset"]').addEventListener('click', () => {
-        store.reset(block.id);
-        host.data.get('publish')?.();
-        host.toast('success', `Tracked state cleared for "${block.title}".`, 'Tracker');
-        host.refresh();
-    });
+    wrap.append(
+        fieldsSection,
+        Field('SideCar profile', profileSelect),
+        h('details', { class: 'stme-sampler' },
+            h('summary', {}, 'Prompt templates ', h('small', {}, 'Advanced — placeholders: {fields}, {fieldsJson}, {current}, {context}')),
+            h('div', { class: 'stme-tracker-templates' },
+                Field('System prompt', systemPromptArea, { stack: true }),
+                Field('User prompt', promptArea, { stack: true }),
+            ),
+        ),
+        h('div', { class: 'stme-tracker-display' },
+            h('div', { class: 'stme-tracker-display-head' },
+                h('strong', {}, 'Display template'),
+                h('small', {}, 'Optional — leave empty for an automatic "name: value" list. Click a token to insert its address.'),
+            ),
+            displayInput,
+            tokens,
+        ),
+        h('div', { class: 'stme-tracker-current' }, h('strong', {}, 'Current state'), h('span', { class: 'stme-tracker-current-value' }, currentLabel)),
+        h('div', { class: 'stme-tracker-actions' },
+            Button('Save tracker', () => {
+                block.sidecarProfile = ui.sidecarProfile.peek();
+                block.systemPromptTemplate = String(ui.systemPromptTemplate.peek()).trim() || DEFAULT_SYSTEM_PROMPT;
+                block.promptTemplate = String(ui.promptTemplate.peek()).trim() || DEFAULT_PROMPT;
+                block.displayTemplate = String(ui.displayTemplate.peek()).trim();
+                ui.systemPromptTemplate.set(block.systemPromptTemplate);
+                ui.promptTemplate.set(block.promptTemplate);
+                ui.displayTemplate.set(block.displayTemplate);
+                host.saveModuleSettings();
+                host.data.get('publish')?.();
+                host.toast('success', `"${block.title}" saved.`, 'Tracker');
+            }),
+            Button('Reset tracked state', () => {
+                store.reset(block.id);
+                host.data.get('publish')?.();
+                host.toast('success', `Tracked state cleared for "${block.title}".`, 'Tracker');
+            }),
+        ),
+    );
 
     return wrap;
-}
-
-function renderBlockCard(block, settings, store, profiles, host) {
-    const fields = sanitizeFields(block.fields);
-    const card = document.createElement('details');
-    card.className = 'stme-module';
-    card.dataset.blockId = block.id;
-    card.draggable = true;
-    card.open = !block.collapsed;
-    card.addEventListener('toggle', () => { block.collapsed = !card.open; host.saveModuleSettings(); });
-    card.addEventListener('dragstart', event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', block.id); card.classList.add('stme-dragging'); });
-    card.addEventListener('dragend', () => card.classList.remove('stme-dragging'));
-
-    const header = document.createElement('summary');
-    header.className = 'stme-module-header';
-    const profileName = profiles.find(item => item.id === block.sidecarProfile)?.name ?? block.sidecarProfile;
-    header.innerHTML = `
-        <div class="stme-tracker-title">
-            <input class="text_pole stme-tracker-title-input" type="text" placeholder="Tracker title" maxlength="60">
-            <small>${fields.length} field${fields.length === 1 ? '' : 's'} · profile: ${profileName}</small>
-        </div>
-        <label class="stme-toggle"><input type="checkbox"> Enabled</label>
-        <button class="menu_button stme-worker-remove" type="button">Remove</button>
-    `;
-
-    const titleInput = header.querySelector('.stme-tracker-title-input');
-    titleInput.value = block.title;
-    titleInput.addEventListener('click', event => event.stopPropagation());
-    titleInput.addEventListener('change', () => { block.title = titleInput.value.trim() || 'Tracker'; host.saveModuleSettings(); host.data.get('publish')?.(); });
-
-    const enabledCheckbox = header.querySelector('.stme-toggle input');
-    enabledCheckbox.checked = block.enabled;
-    enabledCheckbox.addEventListener('click', event => event.stopPropagation());
-    enabledCheckbox.addEventListener('change', () => { block.enabled = enabledCheckbox.checked; host.saveModuleSettings(); host.data.get('publish')?.(); });
-
-    header.querySelector('.stme-worker-remove').addEventListener('click', event => {
-        event.preventDefault(); event.stopPropagation();
-        settings.blocks = settings.blocks.filter(item => item.id !== block.id);
-        host.saveModuleSettings();
-        host.data.remove(`block:${block.id}`);
-        host.data.get('publish')?.();
-        host.refresh();
-    });
-
-    card.append(header);
-    const content = document.createElement('div');
-    content.className = 'stme-module-content';
-    content.append(renderBlockContent(block, store, profiles, host));
-    card.append(content);
-    return card;
 }
 
 export const trackerModule = {
@@ -657,56 +639,44 @@ export const trackerModule = {
     render(container, host) {
         const settings = host.moduleSettings(MODULE_DEFAULTS);
         const store = createTrackerStore(host.context);
-        const profiles = host.sidecar.profiles();
+        const profiles = signal(host.sidecar.profiles());
+        const blocks = signal(settings.blocks);
+        const hudEnabled = signal(Boolean(settings.hud.enabled));
+        const blockUiCache = new Map();
 
-        container.innerHTML = `
-            <p class="stme-tracker-help">Each tracker below is independent: its own SideCar profile, its own prompt, its own fields. Drag a tracker by its grip to reorder it.</p>
-            <label class="stme-check stme-tracker-hud-toggle"><input type="checkbox" data-action="hud-enabled"> Show floating panel <small>A separate, movable tab with live field values — never sent to the main LLM.</small></label>
-            <div class="stme-tracker-blocks"></div>
-            <button class="menu_button stme-tracker-add" type="button"><i class="fa-solid fa-plus"></i> Add tracker</button>
-        `;
-
-        const hudToggle = container.querySelector('[data-action="hud-enabled"]');
-        hudToggle.checked = Boolean(settings.hud.enabled);
-        hudToggle.addEventListener('change', () => {
-            settings.hud = { ...settings.hud, enabled: hudToggle.checked };
-            host.saveModuleSettings();
-            const panel = host.data.get('hudPanel');
-            if (panel) panel.hidden = !hudToggle.checked;
-        });
-
-        const list = container.querySelector('.stme-tracker-blocks');
-        if (!settings.blocks.length) {
-            const empty = document.createElement('p');
-            empty.className = 'stme-tracker-empty';
-            empty.textContent = 'No trackers yet. Add one to start tracking custom state.';
-            list.append(empty);
-        } else {
-            for (const block of settings.blocks) list.append(renderBlockCard(block, settings, store, profiles, host));
-        }
-
-        list.ondragover = event => event.preventDefault();
-        list.ondrop = event => {
-            event.preventDefault();
-            const id = event.dataTransfer.getData('text/plain');
-            const moving = settings.blocks.find(item => item.id === id);
-            if (!moving) return;
-            const target = event.target.closest?.('[data-block-id]');
-            const order = settings.blocks.filter(item => item.id !== id);
-            const at = target ? order.findIndex(item => item.id === target.dataset.blockId) : order.length;
-            order.splice(at < 0 ? order.length : at, 0, moving);
-            settings.blocks = order;
+        const persistBlocks = next => {
+            blocks.set(next);
+            settings.blocks = next;
             host.saveModuleSettings();
             host.data.get('publish')?.();
-            host.refresh();
         };
 
-        container.querySelector('.stme-tracker-add').addEventListener('click', () => {
-            settings.blocks = [...settings.blocks, createBlock()];
-            host.saveModuleSettings();
-            host.data.get('publish')?.();
-            host.refresh();
+        const draggableList = DraggableList(blocks, block => block.id, {
+            isOpen: block => !block.collapsed,
+            onToggleOpen: (block, open) => { block.collapsed = !open; host.saveModuleSettings(); },
+            onReorder: persistBlocks,
+            renderHeader: block => renderBlockHeader(block, getBlockUi(blockUiCache, block), blocks, persistBlocks, profiles, host),
+            renderContent: block => renderBlockContent(block, getBlockUi(blockUiCache, block), store, profiles, host),
         });
+
+        container.append(
+            h('p', { class: 'stme-tracker-help' }, 'Each tracker below is independent: its own SideCar profile, its own prompt, its own fields. Drag a tracker by its grip to reorder it.'),
+            h('div', { class: 'stme-tracker-hud-toggle' },
+                Toggle('Show floating panel', hudEnabled, {
+                    hint: 'A separate, movable tab with live field values — never sent to the main LLM.',
+                    onChange: checked => {
+                        hudEnabled.set(checked);
+                        settings.hud = { ...settings.hud, enabled: checked };
+                        host.saveModuleSettings();
+                        const panel = host.data.get('hudPanel');
+                        if (panel) panel.hidden = !checked;
+                    },
+                }),
+            ),
+            show(computed(() => blocks().length === 0), empty => empty ? h('p', { class: 'stme-tracker-empty' }, 'No trackers yet. Add one to start tracking custom state.') : null),
+            draggableList,
+            Button('+ Add tracker', () => persistBlocks([...blocks.peek(), createBlock()])),
+        );
     },
 
     css: `
@@ -718,7 +688,6 @@ export const trackerModule = {
         .stme-settings .stme-tracker-title-input:focus { outline: 1px solid var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)); border-radius: 4px; }
         .stme-settings .stme-tracker-title small { opacity: .65; }
         .stme-settings .stme-tracker-block { display: flex; flex-direction: column; gap: 10px; }
-        .stme-settings .stme-tracker-block > label:not(.stme-check) { display: grid; grid-template-columns: minmax(110px, .4fr) 1fr; gap: 10px; align-items: center; }
         .stme-settings .stme-tracker-fields { display: flex; flex-direction: column; gap: 6px; }
         .stme-settings .stme-tracker-fields-label { display: flex; flex-direction: column; gap: 2px; font-weight: 600; font-size: .9em; opacity: .85; }
         .stme-settings .stme-tracker-fields-label small { font-weight: normal; opacity: .75; }
@@ -728,20 +697,14 @@ export const trackerModule = {
         .stme-settings .stme-tracker-field-add { display: grid; grid-template-columns: minmax(120px, .35fr) 1fr auto; gap: 8px; align-items: center; }
         .stme-settings .stme-tracker-empty { margin: 0; padding: 8px; opacity: .65; font-size: .9em; }
         .stme-settings .stme-tracker-templates { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-        .stme-settings .stme-tracker-templates label { display: flex; flex-direction: column; gap: 4px; }
         .stme-settings .stme-tracker-display { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: rgba(0, 0, 0, .06); }
         .stme-settings .stme-tracker-display-head { display: flex; flex-direction: column; gap: 2px; }
         .stme-settings .stme-tracker-display-head small { opacity: .7; }
-        .stme-settings .stme-tracker-tokens { display: flex; flex-wrap: wrap; gap: 6px; }
-        .stme-settings .stme-tracker-token { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 65%, var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff))); border-radius: 999px; background: var(--SmartThemeBlurTintColor); font-size: .82em; cursor: pointer; transition: transform .12s ease, filter .12s ease; }
-        .stme-settings .stme-tracker-token:hover { transform: translateY(-1px); filter: brightness(1.12); }
-        .stme-settings .stme-tracker-token-name { font-weight: 600; }
-        .stme-settings .stme-tracker-token code { opacity: .65; }
+        .stme-settings .stme-tracker-tokens { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
         .stme-settings .stme-tracker-current { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; background: rgba(0, 0, 0, .06); }
         .stme-settings .stme-tracker-current-value { opacity: .85; overflow-wrap: anywhere; }
         .stme-settings .stme-tracker-actions { display: flex; gap: 8px; }
-        .stme-settings .stme-tracker-hud-toggle { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: rgba(0, 0, 0, .05); }
-        .stme-settings .stme-tracker-hud-toggle small { opacity: .65; flex-basis: 100%; }
+        .stme-settings .stme-tracker-hud-toggle { padding: 8px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: rgba(0, 0, 0, .05); }
 
         /* Floating panel: appended to document.body, not the chat transcript — reads only from the data bus. */
         .stme-tracker-hud { position: fixed; z-index: 5000; width: 260px; max-height: 70vh; display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 70%, var(--SmartThemeBorderColor)); background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, var(--SmartThemeQuoteColor, #8da8ff)); box-shadow: 0 12px 32px rgba(0, 0, 0, .35); backdrop-filter: blur(6px); font-family: var(--mainFontFamily, inherit); color: var(--SmartThemeBodyColor); }

@@ -1,3 +1,14 @@
+import { h, signal, Field, TextInput, Toggle, Select, SliderField, Button } from './widgets.js';
+
+const FORMAT_OPTIONS = Object.freeze([{ id: 'openai', name: 'OpenAI-compatible' }, { id: 'anthropic', name: 'Anthropic Messages' }, { id: 'google', name: 'Google Gemini' }]);
+const REASONING_MODE_OPTIONS = Object.freeze([{ id: 'inherit', name: 'Provider default' }, { id: 'enabled', name: 'Enabled' }, { id: 'disabled', name: 'Disabled' }]);
+const REASONING_EFFORT_OPTIONS = Object.freeze([{ id: 'low', name: 'Low' }, { id: 'medium', name: 'Medium' }, { id: 'high', name: 'High' }]);
+const SLIDERS = Object.freeze([
+    ['temperature', 'Temperature', 0, 2, 0.05], ['topP', 'Top P', 0, 1, 0.01], ['topK', 'Top K', 0, 200, 1], ['minP', 'Min P', 0, 1, 0.01],
+    ['typicalP', 'Typical P', 0, 1, 0.01], ['repetitionPenalty', 'Repetition penalty', 0, 2, 0.01], ['frequencyPenalty', 'Frequency penalty', -2, 2, 0.01],
+    ['presencePenalty', 'Presence penalty', -2, 2, 0.01], ['maxTokens', 'Max tokens', 1, 32768, 1], ['seed', 'Seed (0 = random)', 0, 999999, 1],
+]);
+
 const DEFAULTS = Object.freeze({
     enabled: false,
     endpoint: '',
@@ -213,24 +224,109 @@ export class SidecarService {
         return String(data.candidates?.[0]?.content?.parts?.[0]?.text ?? '').trim();
     }
 
+    /** Builds the SideCar form once. Connection fields are shared; sampler/reasoning fields reload per selected profile. */
     render(container, toast, includeHeader = true) {
         const settings = this.settings();
-        const profile = this.profile(this.#editingProfile);
-        const sliders = [
-            ['temperature', 'Temperature', 0, 2, 0.05], ['topP', 'Top P', 0, 1, 0.01], ['topK', 'Top K', 0, 200, 1], ['minP', 'Min P', 0, 1, 0.01], ['typicalP', 'Typical P', 0, 1, 0.01], ['repetitionPenalty', 'Repetition penalty', 0, 2, 0.01], ['frequencyPenalty', 'Frequency penalty', -2, 2, 0.01], ['presencePenalty', 'Presence penalty', -2, 2, 0.01], ['maxTokens', 'Max tokens', 1, 32768, 1], ['seed', 'Seed (0 = random)', 0, 999999, 1],
-        ];
-        const sliderHtml = sliders.map(([key, label, min, max, step]) => `<label class="stme-slider"><span>${label} <output data-output="${key}"></output></span><input data-field="${key}" type="range" min="${min}" max="${max}" step="${step}"></label>`).join('');
+
+        const profileId = signal(this.#editingProfile);
+        const profiles = signal(this.profiles());
+
+        const enabled = signal(settings.enabled);
+        const format = signal(settings.format);
+        const endpoint = signal(settings.endpoint);
+        const apiKey = signal(settings.apiKey);
+        const model = signal(settings.model);
+
+        const sliderSignals = Object.fromEntries(SLIDERS.map(([key]) => [key, signal(0)]));
+        const reasoningMode = signal(DEFAULTS.reasoningMode);
+        const reasoningEffort = signal(DEFAULTS.reasoningEffort);
+        const reasoningMaxTokens = signal(DEFAULTS.reasoningMaxTokens);
+        const reasoningExclude = signal(DEFAULTS.reasoningExclude);
+
+        const loadProfile = id => {
+            const profile = this.profile(id);
+            for (const [key] of SLIDERS) sliderSignals[key].set(profile[key]);
+            reasoningMode.set(profile.reasoningMode);
+            reasoningEffort.set(profile.reasoningEffort);
+            reasoningMaxTokens.set(profile.reasoningMaxTokens);
+            reasoningExclude.set(profile.reasoningExclude);
+        };
+        loadProfile(this.#editingProfile);
+
+        const readAll = () => ({
+            enabled: enabled.peek(), format: format.peek(), endpoint: endpoint.peek(), apiKey: apiKey.peek(), model: model.peek(),
+            ...Object.fromEntries(SLIDERS.map(([key]) => [key, sliderSignals[key].peek()])),
+            reasoningMode: reasoningMode.peek(), reasoningEffort: reasoningEffort.peek(), reasoningMaxTokens: reasoningMaxTokens.peek(), reasoningExclude: reasoningExclude.peek(),
+        });
+
+        const profileSelect = Select(profileId, profiles);
+        profileSelect.addEventListener('change', () => {
+            this.#editingProfile = profileSelect.value;
+            profileId.set(profileSelect.value);
+            loadProfile(profileSelect.value);
+        });
+
+        const apiKeyInput = TextInput(apiKey, { type: 'password', placeholder: 'Optional for local endpoints' });
+        apiKeyInput.autocomplete = 'off';
+
         container.className = 'stme-sidecar';
-        const header = includeHeader ? '<header><div><strong>SideCar</strong><small>One shared model profile for all modules.</small></div></header>' : '';
-        container.innerHTML = `${header}<div class="stme-sidecar-fields"><div class="stme-profile-row"><label>Sampler profile <select class="text_pole" data-field="profileId"></select></label><button class="menu_button" data-action="new-profile" type="button">New profile</button></div><label class="stme-check"><input data-field="enabled" type="checkbox"> Enable SideCar</label><label>Format <select class="text_pole" data-field="format"><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic Messages</option><option value="google">Google Gemini</option></select></label><label>Endpoint <input class="text_pole" data-field="endpoint" type="url" placeholder="https://api.example.com/v1"></label><label>API key <input class="text_pole" data-field="apiKey" type="password" autocomplete="off" placeholder="Optional for local endpoints"></label><label>Model <input class="text_pole" data-field="model" type="text" placeholder="Model name"></label><details class="stme-sampler"><summary>Sampler settings <small>Unsupported fields may be ignored by your provider.</small></summary><div class="stme-sampler-grid">${sliderHtml}</div></details><details class="stme-reasoning"><summary>Reasoning <small>OpenRouter only</small></summary><div class="stme-reasoning-grid"><label>Mode <select class="text_pole" data-field="reasoningMode"><option value="inherit">Provider default</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label><label>Effort <select class="text_pole" data-field="reasoningEffort"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label class="stme-slider"><span>Reasoning tokens <output data-output="reasoningMaxTokens"></output></span><input data-field="reasoningMaxTokens" type="range" min="0" max="32768" step="1"></label><label class="stme-check"><input data-field="reasoningExclude" type="checkbox"> Hide reasoning from the reply</label></div></details><div><button class="menu_button" data-action="save" type="button">Save SideCar</button> <button class="menu_button" data-action="test" type="button">Test connection</button></div></div>`;
-        for (const [key, value] of Object.entries({ ...settings, ...profile })) { const input = container.querySelector(`[data-field="${key}"]`); if (!input) continue; if (input.type === 'checkbox') input.checked = value; else input.value = value; const output = container.querySelector(`[data-output="${key}"]`); if (output) output.value = value; }
-        for (const input of container.querySelectorAll('input[type="range"]')) input.addEventListener('input', () => { container.querySelector(`[data-output="${input.dataset.field}"]`).value = input.value; });
-        const fields = ['enabled', 'format', 'endpoint', 'apiKey', 'model', ...sliders.map(([key]) => key), 'reasoningMode', 'reasoningEffort', 'reasoningMaxTokens', 'reasoningExclude'];
-        const profileSelect = container.querySelector('[data-field="profileId"]'); for (const item of this.profiles()) { const option = new Option(item.name, item.id); option.selected = item.id === this.#editingProfile; profileSelect.add(option); }
-        profileSelect.addEventListener('change', () => { this.#editingProfile = profileSelect.value; this.render(container, toast, includeHeader); });
-        container.querySelector('[data-action="new-profile"]').addEventListener('click', () => { this.createProfile(window.prompt('Profile name', 'New profile')); this.render(container, toast, includeHeader); });
-        const read = () => Object.fromEntries(fields.map(key => { const input = container.querySelector(`[data-field="${key}"]`); return [key, input.type === 'checkbox' ? input.checked : input.value]; }));
-        container.querySelector('[data-action="save"]').addEventListener('click', () => { const values = read(); this.update(values); Object.assign(this.profile(this.#editingProfile), Object.fromEntries([...sliders.map(([key]) => key), 'reasoningMode', 'reasoningEffort', 'reasoningMaxTokens', 'reasoningExclude'].map(key => [key, values[key]]))); this.settings().profiles[this.#editingProfile] = this.profile(this.#editingProfile); this.#save(); toast('success', 'SideCar profile saved.', 'SideCar'); });
-        container.querySelector('[data-action="test"]').addEventListener('click', async event => { const button = event.currentTarget; button.disabled = true; try { this.update(read()); const result = await this.test(); toast('success', `Connected in ${result.latencyMs} ms: ${result.text || '(empty response)'}`, 'SideCar'); } catch (error) { toast('error', error?.message || String(error), 'SideCar'); } finally { button.disabled = false; } });
+        const header = includeHeader ? h('header', {}, h('div', {}, h('strong', {}, 'SideCar'), h('small', {}, 'One shared model profile for all modules.'))) : null;
+
+        if (header) container.append(header);
+        container.append(
+            h('div', { class: 'stme-sidecar-fields' },
+                h('div', { class: 'stme-profile-row' },
+                    Field('Sampler profile', profileSelect),
+                    Button('New profile', () => {
+                        const id = this.createProfile(window.prompt('Profile name', 'New profile'));
+                        profiles.set(this.profiles());
+                        profileId.set(id);
+                        loadProfile(id);
+                    }),
+                ),
+                Toggle('Enable SideCar', enabled),
+                Field('Format', Select(format, signal(FORMAT_OPTIONS))),
+                Field('Endpoint', TextInput(endpoint, { type: 'url', placeholder: 'https://api.example.com/v1' })),
+                Field('API key', apiKeyInput),
+                Field('Model', TextInput(model, { placeholder: 'Model name' })),
+                h('details', { class: 'stme-sampler' },
+                    h('summary', {}, 'Sampler settings ', h('small', {}, 'Unsupported fields may be ignored by your provider.')),
+                    h('div', { class: 'stme-sampler-grid' }, SLIDERS.map(([key, label, min, max, step]) => SliderField(label, sliderSignals[key], { min, max, step }))),
+                ),
+                h('details', { class: 'stme-reasoning' },
+                    h('summary', {}, 'Reasoning ', h('small', {}, 'OpenRouter only')),
+                    h('div', { class: 'stme-reasoning-grid' },
+                        Field('Mode', Select(reasoningMode, signal(REASONING_MODE_OPTIONS))),
+                        Field('Effort', Select(reasoningEffort, signal(REASONING_EFFORT_OPTIONS))),
+                        SliderField('Reasoning tokens', reasoningMaxTokens, { min: 0, max: 32768, step: 1 }),
+                        Toggle('Hide reasoning from the reply', reasoningExclude),
+                    ),
+                ),
+                h('div', {},
+                    Button('Save SideCar', () => {
+                        const values = readAll();
+                        this.update(values);
+                        Object.assign(this.profile(this.#editingProfile), Object.fromEntries([...SLIDERS.map(([key]) => key), 'reasoningMode', 'reasoningEffort', 'reasoningMaxTokens', 'reasoningExclude'].map(key => [key, values[key]])));
+                        this.settings().profiles[this.#editingProfile] = this.profile(this.#editingProfile);
+                        this.#save();
+                        toast('success', 'SideCar profile saved.', 'SideCar');
+                    }),
+                    ' ',
+                    Button('Test connection', async event => {
+                        const button = event.currentTarget;
+                        button.disabled = true;
+                        try {
+                            this.update(readAll());
+                            const result = await this.test();
+                            toast('success', `Connected in ${result.latencyMs} ms: ${result.text || '(empty response)'}`, 'SideCar');
+                        } catch (error) {
+                            toast('error', error?.message || String(error), 'SideCar');
+                        } finally {
+                            button.disabled = false;
+                        }
+                    }),
+                ),
+            ),
+        );
     }
 }
