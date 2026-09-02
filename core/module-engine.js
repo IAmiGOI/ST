@@ -21,7 +21,7 @@ export class ModuleEngine {
     #chatListeners = new Set();
     #root;
     #logs = [];
-    #data = new ModuleDataBus();
+    #data;
     #moduleStyles = new Map();
 
     #registeredIds = signal([]);
@@ -34,6 +34,10 @@ export class ModuleEngine {
     constructor(getContext) {
         this.getContext = getContext;
         this.sidecar = new SidecarManager(() => this.settings(), () => this.saveSettings());
+        this.#data = new ModuleDataBus({
+            getContext: () => this.getContext(),
+            onContaminate: report => this.#log('warning', report.id?.split(':')[0] ?? 'bus', report.message),
+        });
         this.#orderedSignal = computed(() => {
             this.#layoutVersion();
             const order = this.layout().moduleOrder;
@@ -129,6 +133,9 @@ export class ModuleEngine {
         if (!cleanup) return;
         await cleanup();
         this.#active.delete(id);
+        // Belt-and-suspenders: release every bus channel/macro/pull-timer this module
+        // owned, even if its own cleanup() forgot to unreserve something.
+        this.#data.releaseNamespace(id);
         this.#enabledMap.update(map => ({ ...map, [id]: false }));
         this.#errorMap.update(map => { if (!(id in map)) return map; const next = { ...map }; delete next[id]; return next; });
     }
@@ -295,8 +302,21 @@ export class ModuleEngine {
                 set: (key, value) => this.#data.set(module.id, key, value),
                 remove: key => this.#data.remove(module.id, key),
                 read: (namespace, key, fallback) => this.#data.get(namespace, key, fallback),
-                write: (namespace, key, value) => this.#data.set(namespace, key, value),
+                write: (namespace, key, value) => this.#data.write(namespace, key, value, module.id),
                 subscribe: (namespace, key, listener) => this.#data.subscribe(namespace, key, listener),
+                /**
+                 * Declares `key` (in this module's own namespace) as a protected channel.
+                 * options: { name, schema, allowExternalWrite, macro, webhook: { pushUrl, pullUrl, pullIntervalMs } }.
+                 * Returns { id, unreserve() } — call unreserve() in your cleanup if the
+                 * channel shouldn't outlive some narrower scope than the whole module
+                 * (the engine already releases everything on disable regardless).
+                 */
+                reserve: (key, options) => this.#data.reserve(module.id, key, options),
+                history: key => this.#data.history(module.id, key),
+                restore: (key, stepsBack) => this.#data.restore(module.id, key, stepsBack),
+                describe: (namespace, key) => this.#data.describe(namespace, key),
+                listChannels: namespace => this.#data.listChannels(namespace),
+                findByName: name => this.#data.findByName(name),
             }),
             onEvent: (eventType, listener) => {
                 const context = this.getContext();
