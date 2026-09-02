@@ -57,3 +57,22 @@
 .stme-settings .stme-rp-time { display: flex; align-items: center; gap: 7px; width: fit-content; margin: 14px 0 2px auto; padding: 6px 10px; border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 75%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 70%, var(--SmartThemeQuoteColor, #8da8ff)); box-shadow: 0 3px 10px rgba(0,0,0,.18); font-size: .84em; }
 .stme-settings .stme-rp-time-icon { color: var(--SmartThemeQuoteColor, #8da8ff); font-size: 1.2em; }.stme-settings .stme-rp-time-label { opacity: .68; text-transform: uppercase; letter-spacing: .06em; font-size: .8em; }.stme-settings .stme-rp-time-value { font-weight: 700; }
 .stme-settings .stme-profile-row { display:flex; gap:8px; align-items:end; padding:8px; border-radius:8px; background:rgba(0,0,0,.09); }.stme-settings .stme-profile-row label { flex:1; display:flex; flex-direction:column; gap:3px; font-size:.85em; }
+/* This badge is rendered inside chat messages, outside .stme-settings. */
+#chat .stme-rp-time, .mes .stme-rp-time {
+    display: block !important;
+    box-sizing: border-box;
+    width: min(100%, 330px);
+    margin: 18px 0 4px auto !important;
+    padding: 10px 14px 11px !important;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 78%, var(--SmartThemeBorderColor)) !important;
+    border-left: 4px solid var(--SmartThemeQuoteColor, #8da8ff) !important;
+    border-radius: 10px !important;
+    background: linear-gradient(120deg, color-mix(in srgb, var(--SmartThemeBlurTintColor) 84%, var(--SmartThemeQuoteColor, #8da8ff)), var(--SmartThemeBlurTintColor)) !important;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .22) !important;
+    font-family: var(--mainFontFamily, inherit);
+    text-align: left;
+}
+#chat .stme-rp-time-head, .mes .stme-rp-time-head { display: flex !important; align-items: center; gap: 7px; margin-bottom: 4px; }
+#chat .stme-rp-time-icon, .mes .stme-rp-time-icon { display: grid; place-items: center; width: 21px; height: 21px; border-radius: 50%; background: var(--SmartThemeQuoteColor, #8da8ff); color: var(--SmartThemeBodyColor); font-size: 15px; line-height: 1; }
+#chat .stme-rp-time-label, .mes .stme-rp-time-label { color: var(--SmartThemeBodyColor); opacity: .7; font-size: .72em; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
+#chat .stme-rp-time-value, .mes .stme-rp-time-value { color: var(--SmartThemeBodyColor); font-size: 1.12em; font-weight: 700; letter-spacing: .025em; line-height: 1.25; }
