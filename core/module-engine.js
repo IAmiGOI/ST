@@ -1,6 +1,7 @@
 import { SidecarManager } from './sidecar-manager.js';
 import { ModuleDataBus } from './data-bus.js';
 import { h, show, signal, computed, effectOn, Button, TextInput, Toggle, DraggableList } from './widgets.js';
+import { createDevPanel } from './dev-panel.js';
 
 const SETTINGS_KEY = 'st_module_engine';
 
@@ -158,6 +159,33 @@ export class ModuleEngine {
         return this.#orderedSignal();
     }
 
+    /** The shared data bus — read-only introspection surface for `core/dev-panel.js`. Modules use `host.data`, not this directly. */
+    get bus() {
+        return this.#data;
+    }
+
+    /** One row per registered module: id, title, and current enabled/error state. For the dev panel. */
+    listModuleStates() {
+        return [...this.#modules.values()].map(module => ({
+            id: module.id,
+            title: module.title,
+            enabled: Boolean(this.#enabledMap()[module.id]),
+            error: this.#errorMap()[module.id]?.message ?? null,
+        }));
+    }
+
+    /** Most recent log entries first (see #log()). For the dev panel. */
+    logs() {
+        return [...this.#logs];
+    }
+
+    /** Position/visibility for the floating ModuleEngine Developer panel — engine-level, not per-module. */
+    devPanelSettings() {
+        const settings = this.settings();
+        settings.devPanel ??= { visible: false, collapsed: false, x: null, y: null };
+        return settings.devPanel;
+    }
+
     /** Builds the whole reactive UI tree once. Cards persist for the life of the page from here on. */
     mount(root) {
         this.#root = root;
@@ -187,6 +215,14 @@ export class ModuleEngine {
         baseList.append(sidecarCard);
 
         baseList.append(this.#renderModuleLoader());
+
+        // Not a module, not nested in either list above — a floating window
+        // toggled from one button at the very bottom of the whole drawer, so it
+        // reads as its own detached tool rather than another card in this UI.
+        const devPanel = createDevPanel(this);
+        const devFooter = h('div', { class: 'stme-dev-footer' },
+            Button('⚙ ModuleEngine Developer', () => devPanel.toggle()));
+        (root.querySelector('.inline-drawer-content') ?? root).append(devFooter);
     }
 
     #renderModuleHeader(module) {

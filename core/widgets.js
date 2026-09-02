@@ -147,5 +147,68 @@ export function DraggableList(items, keyFn, { renderHeader, renderContent, isOpe
     return container;
 }
 
+/**
+ * Drags `panel` by pointer events on `handle` (its header, typically), clamped
+ * to the viewport. Calls `onDrop({ x, y })` with the final on-screen position
+ * once the drag ends — the caller decides whether/where to persist it. Used by
+ * any floating window appended to `document.body` (Tracker's HUD, the engine's
+ * Developer panel). Returns a cleanup function.
+ */
+export function makeDraggable(panel, handle, { onDrop } = {}) {
+    let dragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    const onPointerDown = event => {
+        if (event.target.closest('button')) return;
+        dragging = true;
+        const rect = panel.getBoundingClientRect();
+        offsetX = event.clientX - rect.left;
+        offsetY = event.clientY - rect.top;
+        handle.setPointerCapture(event.pointerId);
+    };
+    const onPointerMove = event => {
+        if (!dragging) return;
+        const x = Math.min(Math.max(0, event.clientX - offsetX), window.innerWidth - panel.offsetWidth);
+        const y = Math.min(Math.max(0, event.clientY - offsetY), window.innerHeight - panel.offsetHeight);
+        panel.style.left = `${x}px`;
+        panel.style.top = `${y}px`;
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+    };
+    const onPointerUp = () => {
+        if (!dragging) return;
+        dragging = false;
+        onDrop?.({ x: parseInt(panel.style.left, 10), y: parseInt(panel.style.top, 10) });
+    };
+
+    handle.addEventListener('pointerdown', onPointerDown);
+    handle.addEventListener('pointermove', onPointerMove);
+    handle.addEventListener('pointerup', onPointerUp);
+    handle.addEventListener('pointercancel', onPointerUp);
+
+    return () => {
+        handle.removeEventListener('pointerdown', onPointerDown);
+        handle.removeEventListener('pointermove', onPointerMove);
+        handle.removeEventListener('pointerup', onPointerUp);
+        handle.removeEventListener('pointercancel', onPointerUp);
+    };
+}
+
+/** Places a floating panel at a saved `{x, y}`, or the bottom-right corner if there isn't one yet. */
+export function applyFloatingPosition(panel, position) {
+    if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
+        panel.style.left = `${position.x}px`;
+        panel.style.top = `${position.y}px`;
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+    } else {
+        panel.style.right = '20px';
+        panel.style.bottom = '20px';
+        panel.style.left = 'auto';
+        panel.style.top = 'auto';
+    }
+}
+
 export { h, list, show, effect, effectOn, onDispose, autoDispose, mount } from './dom.js';
 export { signal, computed, isSignal, unwrap } from './reactive.js';

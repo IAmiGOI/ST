@@ -2,6 +2,7 @@ import { createTrackerStore } from './store.js';
 import {
     h, list, show, signal, computed, onDispose, effectOn,
     Field, TextInput, TextArea, Select, Toggle, Button, Chip, DraggableList,
+    makeDraggable, applyFloatingPosition,
 } from '../../core/widgets.js';
 
 const MODULE_ID = 'tracker';
@@ -220,62 +221,18 @@ function createHudPanel() {
 }
 
 function applyHudPosition(panel, settings) {
-    if (Number.isFinite(settings.hud.x) && Number.isFinite(settings.hud.y)) {
-        panel.style.left = `${settings.hud.x}px`;
-        panel.style.top = `${settings.hud.y}px`;
-        panel.style.right = 'auto';
-        panel.style.bottom = 'auto';
-    } else {
-        panel.style.right = '20px';
-        panel.style.bottom = '20px';
-        panel.style.left = 'auto';
-        panel.style.top = 'auto';
-    }
+    applyFloatingPosition(panel, settings.hud);
 }
 
 /** Drags the panel by its header (grip) and persists the dropped position. Returns a cleanup function. */
 function makeHudDraggable(panel, host) {
-    const head = panel.querySelector('.stme-tracker-hud-head');
-    let dragging = false;
-    let offsetX = 0;
-    let offsetY = 0;
-
-    const onPointerDown = event => {
-        if (event.target.closest('button')) return;
-        dragging = true;
-        const rect = panel.getBoundingClientRect();
-        offsetX = event.clientX - rect.left;
-        offsetY = event.clientY - rect.top;
-        head.setPointerCapture(event.pointerId);
-    };
-    const onPointerMove = event => {
-        if (!dragging) return;
-        const x = Math.min(Math.max(0, event.clientX - offsetX), window.innerWidth - panel.offsetWidth);
-        const y = Math.min(Math.max(0, event.clientY - offsetY), window.innerHeight - panel.offsetHeight);
-        panel.style.left = `${x}px`;
-        panel.style.top = `${y}px`;
-        panel.style.right = 'auto';
-        panel.style.bottom = 'auto';
-    };
-    const onPointerUp = () => {
-        if (!dragging) return;
-        dragging = false;
-        const settings = host.moduleSettings(MODULE_DEFAULTS);
-        settings.hud = { ...settings.hud, x: parseInt(panel.style.left, 10), y: parseInt(panel.style.top, 10) };
-        host.saveModuleSettings();
-    };
-
-    head.addEventListener('pointerdown', onPointerDown);
-    head.addEventListener('pointermove', onPointerMove);
-    head.addEventListener('pointerup', onPointerUp);
-    head.addEventListener('pointercancel', onPointerUp);
-
-    return () => {
-        head.removeEventListener('pointerdown', onPointerDown);
-        head.removeEventListener('pointermove', onPointerMove);
-        head.removeEventListener('pointerup', onPointerUp);
-        head.removeEventListener('pointercancel', onPointerUp);
-    };
+    return makeDraggable(panel, panel.querySelector('.stme-tracker-hud-head'), {
+        onDrop: position => {
+            const settings = host.moduleSettings(MODULE_DEFAULTS);
+            settings.hud = { ...settings.hud, ...position };
+            host.saveModuleSettings();
+        },
+    });
 }
 
 /**

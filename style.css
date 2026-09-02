@@ -106,6 +106,42 @@
 .stme-settings .stme-chip-remove { opacity: .7; }
 .stme-settings .stme-chip-remove:hover { opacity: 1; }
 
+/* Bottom-of-drawer button that opens the floating ModuleEngine Developer panel. */
+.stme-settings .stme-dev-footer { margin-top: 16px; padding-top: 12px; border-top: 1px dashed color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent); text-align: center; }
+.stme-settings .stme-dev-footer .menu_button { opacity: .75; font-size: .85em; }
+.stme-settings .stme-dev-footer .menu_button:hover { opacity: 1; }
+
+/* Floating panel: appended to document.body, not part of ST Module Engine's own drawer. */
+.stme-dev-panel { position: fixed; z-index: 5000; width: 380px; max-height: 75vh; display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 70%, var(--SmartThemeBorderColor)); background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, var(--SmartThemeQuoteColor, #8da8ff)); box-shadow: 0 14px 36px rgba(0, 0, 0, .4); backdrop-filter: blur(6px); font-family: var(--mainFontFamily, inherit); color: var(--SmartThemeBodyColor); font-size: .85em; }
+.stme-dev-panel[hidden] { display: none; }
+.stme-dev-panel-head { display: flex; align-items: center; gap: 6px; padding: 8px 9px; cursor: grab; background: linear-gradient(105deg, transparent, rgba(0, 0, 0, .16)); user-select: none; touch-action: none; }
+.stme-dev-panel-head:active { cursor: grabbing; }
+.stme-dev-panel-grip { opacity: .6; }
+.stme-dev-panel-head strong { flex: 1; font-size: .85em; letter-spacing: .03em; }
+.stme-dev-panel-head .menu_button { width: 22px; height: 22px; padding: 0; line-height: 1; font-size: 1em; }
+.stme-dev-panel-body { padding: 10px 11px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.stme-dev-panel.stme-dev-panel-collapsed .stme-dev-panel-body { display: none; }
+.stme-dev-empty { margin: 0; opacity: .6; font-size: .9em; }
+.stme-dev-section h4 { margin: 0 0 6px; font-size: .8em; text-transform: uppercase; letter-spacing: .06em; opacity: .7; }
+.stme-dev-table { display: flex; flex-direction: column; gap: 4px; }
+.stme-dev-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 7px; border-radius: 6px; background: rgba(0, 0, 0, .12); }
+.stme-dev-row-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; overflow-wrap: anywhere; }
+.stme-dev-row-title code { opacity: .55; font-size: .85em; }
+.stme-dev-badge { flex-shrink: 0; padding: 2px 7px; border-radius: 999px; font-size: .8em; white-space: nowrap; }
+.stme-dev-badge-on { background: color-mix(in srgb, #4caf7d 35%, transparent); color: #bdf5d6; }
+.stme-dev-badge-off { background: rgba(255, 255, 255, .1); opacity: .7; }
+.stme-dev-badge-error { background: color-mix(in srgb, #c0392b 40%, transparent); color: #ffcfc7; }
+.stme-dev-channel-row { flex-direction: column; align-items: stretch; gap: 4px; }
+.stme-dev-channel-flags { display: flex; flex-wrap: wrap; gap: 4px; }
+.stme-dev-flag { padding: 1px 6px; border-radius: 999px; background: rgba(255, 255, 255, .1); font-size: .78em; opacity: .85; }
+.stme-dev-channel-value { display: block; padding: 4px 6px; border-radius: 5px; background: rgba(0, 0, 0, .18); overflow-wrap: anywhere; font-size: .82em; }
+.stme-dev-log { display: flex; flex-direction: column; gap: 3px; max-height: 220px; overflow-y: auto; }
+.stme-dev-log-row { display: grid; grid-template-columns: auto auto 1fr; gap: 6px; padding: 3px 5px; border-radius: 5px; font-size: .82em; }
+.stme-dev-log-row.stme-dev-log-error { background: color-mix(in srgb, #c0392b 22%, transparent); }
+.stme-dev-log-time { opacity: .55; }
+.stme-dev-log-module { opacity: .75; font-weight: 600; }
+.stme-dev-log-message { overflow-wrap: anywhere; }
+
 /* Fill the full width SillyTavern gives the extension panel, and use it responsively. */
 #st_module_engine.stme-settings { width: 100%; max-width: 100%; }
 .stme-settings .inline-drawer-content { padding: 16px; border-radius: 14px; background: linear-gradient(165deg, color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, var(--stme-accent)), var(--SmartThemeBlurTintColor) 60%); border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 65%, var(--stme-accent)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05), 0 10px 28px rgba(0, 0, 0, .2); }
