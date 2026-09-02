@@ -1,16 +1,6 @@
 # ST Module Engine
 
-## Installation
-
-In SillyTavern **Extensions → Install extension**, enter the repository clone URL only (not a GitHub `tree/...` page, a Discord/webhook URL, or a link to a subfolder):
-
-```text
-https://github.com/IAmiGOI/ST.git
-```
-
-Alternatively, copy the contents of this repository into `SillyTavern/public/scripts/extensions/third-party/STModuleEngine/`. In both cases, `manifest.json` must be at the root of the installed folder, next to `index.js`. Reload SillyTavern after installation.
-
-The settings UI is embedded in `index.js`; it does not load a separate `settings.html` file, so the extension also works when SillyTavern chooses a different install-folder name.
+Install this repository directly as `SillyTavern/public/scripts/extensions/third-party/STModuleEngine/` and reload SillyTavern. The `manifest.json` file must be at the root of that installed folder (next to `index.js`).
 
 It is a single SillyTavern extension that hosts independently implemented modules under one **ST Module Engine** drawer. Each module has its own lifecycle (`activate`/cleanup), UI renderer, and can be enabled or disabled without unloading the host. Shared host APIs cover native function tools, prompt injection, chat-change notifications, toasts, UI refreshes, and a shared SideCar model.
 
