@@ -2,7 +2,7 @@
 
 Install the `STModuleEngine` folder in `SillyTavern/public/scripts/extensions/third-party/` and reload SillyTavern.
 
-It is a single SillyTavern extension that hosts independently implemented modules under one **ST Module Engine** drawer. Each module has its own lifecycle (`activate`/cleanup), UI renderer, and can be enabled or disabled without unloading the host. Shared host APIs cover native function tools, prompt injection, chat-change notifications, toasts, and UI refreshes.
+It is a single SillyTavern extension that hosts independently implemented modules under one **ST Module Engine** drawer. Each module has its own lifecycle (`activate`/cleanup), UI renderer, and can be enabled or disabled without unloading the host. Shared host APIs cover native function tools, prompt injection, chat-change notifications, toasts, UI refreshes, and a shared SideCar model.
 
 ## Included module: Notebook
 
@@ -24,3 +24,23 @@ Create a module object and pass it to `engine.register()` before `engine.start()
 ```
 
 Module enablement is stored in `extensionSettings.st_module_engine.modules`; per-chat Notebook data is stored in `chatMetadata` under `stme_notebook_*` keys.
+
+## Shared SideCar API
+
+The **SideCar** card in the engine UI owns the one model profile (endpoint, format, key, model, sampler settings). Secrets remain in SillyTavern extension settings and are never returned through the module API. Every module receives `host.sidecar`:
+
+```js
+// A one-off request; use it when the module does not need a lifecycle client.
+const answer = await host.sidecar.request({
+  systemPrompt: 'You classify scenes.',
+  prompt: 'Classify this message: ...',
+  maxTokens: 100,
+});
+
+// A lifecycle lease; acquire in activate(), release in the returned cleanup.
+const sidecar = host.sidecar.acquire('scene-indexer');
+const answer = await sidecar.request({ prompt: '...' });
+return () => sidecar.release();
+```
+
+A lease is intentionally lightweight: it does **not** hold an HTTP connection or run a model continuously. It represents long-lived access to the centrally configured SideCar profile; each `request()` is still an independent generation. This keeps one model configuration under user control while allowing modules to use it on demand or through their full active lifetime.

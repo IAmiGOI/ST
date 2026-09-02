@@ -11,3 +11,9 @@
 .stme-settings .stme-note-editor { margin-top: 10px; }
 .stme-settings .stme-note { padding: 8px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; background: var(--SmartThemeBlurTintColor); white-space: pre-wrap; overflow-wrap: anywhere; }
 .stme-settings .stme-note > div { margin-top: 4px; opacity: .9; }
+.stme-settings .stme-sidecar { margin: 10px 0; border: 1px solid var(--SmartThemeBorderColor); border-radius: 7px; overflow: hidden; }
+.stme-settings .stme-sidecar > header { padding: 9px 10px; background: var(--SmartThemeBlurTintColor); }
+.stme-settings .stme-sidecar header small { display: block; margin-top: 3px; opacity: .7; }
+.stme-settings .stme-sidecar-fields { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+.stme-settings .stme-sidecar-fields > label:not(.stme-check) { display: grid; grid-template-columns: minmax(105px, .45fr) 1fr; align-items: center; gap: 10px; }
+.stme-settings .stme-sidecar-fields .stme-check { display: flex; align-items: center; gap: 6px; }

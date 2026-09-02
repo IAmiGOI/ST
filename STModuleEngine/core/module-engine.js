@@ -1,3 +1,5 @@
+import { SidecarService } from './sidecar-service.js';
+
 const SETTINGS_KEY = 'st_module_engine';
 
 /**
@@ -13,6 +15,7 @@ export class ModuleEngine {
 
     constructor(getContext) {
         this.getContext = getContext;
+        this.sidecar = new SidecarService(() => this.settings(), () => this.saveSettings());
     }
 
     register(module) {
@@ -139,6 +142,10 @@ export class ModuleEngine {
             }
             list.append(card);
         }
+
+        const sidecar = document.createElement('section');
+        list.append(sidecar);
+        this.sidecar.render(sidecar, (level, message, title) => this.#toast(level, message, title));
     }
 
     #hostFor(module) {
@@ -154,6 +161,7 @@ export class ModuleEngine {
             },
             unregisterTool: (name) => this.getContext().unregisterFunctionTool?.(name),
             toast: (level, message, title = module.title) => this.#toast(level, message, title),
+            sidecar: this.sidecar.forModule(module.id),
             onChatChanged: (listener) => {
                 this.#chatListeners.add(listener);
                 return () => this.#chatListeners.delete(listener);
