@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     sanitizeFields, describeFields, buildTrackerRequest, parseTrackerResponse, buildLabel, normalizeFieldName,
-    describeBlockForBus,
+    describeBlockForBus, sanitizeVocabulary, buildClassifyRequest, parseClassifyResponse,
 } from '../modules/tracker/index.js';
 
 test('sanitizeFields normalizes names, drops duplicates and blanks', () => {
@@ -85,4 +85,29 @@ test('describeBlockForBus exposes only what the bus needs, never prompts or Side
 test('describeBlockForBus treats a missing enabled flag as enabled, but false stays false', () => {
     assert.equal(describeBlockForBus({ id: 'a', title: 'A', fields: [] }).enabled, true);
     assert.equal(describeBlockForBus({ id: 'b', title: 'B', fields: [], enabled: false }).enabled, false);
+});
+
+test('sanitizeVocabulary trims, dedupes, drops blanks, and caps at 50', () => {
+    assert.deepEqual(sanitizeVocabulary([' combat ', 'combat', '', null, 'tavern']), ['combat', 'tavern']);
+    const huge = Array.from({ length: 80 }, (_, i) => `key${i}`);
+    assert.equal(sanitizeVocabulary(huge).length, 50);
+    assert.equal(sanitizeVocabulary(null).length, 0);
+});
+
+test('buildClassifyRequest lists every vocabulary key and folds in recent context', () => {
+    const chat = [{ is_user: true, mes: 'We enter the tavern.' }, { is_user: false, mes: 'The bard starts playing.' }];
+    const request = buildClassifyRequest(['combat', 'tavern', 'night'], chat);
+    assert.match(request.systemPrompt, /combat, tavern, night/);
+    assert.match(request.systemPrompt, /Return ONLY a JSON array/);
+    assert.match(request.prompt, /Player: We enter the tavern/);
+});
+
+test('parseClassifyResponse keeps only keys that are actually in the vocabulary', () => {
+    const parsed = parseClassifyResponse('```json\n["tavern", "combat", "made-up-key"]\n```', ['combat', 'tavern', 'night']);
+    assert.deepEqual(parsed.keys, ['tavern', 'combat']);
+});
+
+test('parseClassifyResponse returns no keys when the reply has no JSON array', () => {
+    assert.deepEqual(parseClassifyResponse('I refuse to answer.', ['combat']), { keys: [] });
+    assert.deepEqual(parseClassifyResponse('not json at all [', ['combat']), { keys: [] });
 });

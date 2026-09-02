@@ -106,6 +106,47 @@ test('disabling the providing module unregisters its service — a consumer degr
     assert.doesNotThrow(() => consumerHost.services.request('svc').ping());
 });
 
+test('ask() delivers a typed request to the provider\'s handleRequest and returns its answer', async () => {
+    const engine = makeEngine();
+    let consumerHost;
+    engine.register(stubModule('tracker-ish', {
+        activate(host) {
+            host.services.register('tracker', {
+                handleRequest(type, payload, askerId) {
+                    if (type === 'classify') return { keys: payload.vocabulary.filter(key => key === 'combat'), askerId };
+                    throw new Error(`unknown type ${type}`);
+                },
+            });
+            return () => {};
+        },
+    }));
+    engine.register(stubModule('music', { activate(host) { consumerHost = host; return () => {}; } }));
+    await engine.start();
+
+    const answer = await consumerHost.services.ask('tracker', 'classify', { vocabulary: ['combat', 'tavern'] });
+    assert.deepEqual(answer, { keys: ['combat'], askerId: 'music' });
+});
+
+test('ask() resolves to undefined (never rejects) when the service is missing, unsupported, or throws', async () => {
+    const engine = makeEngine();
+    let host;
+    engine.register(stubModule('provider', {
+        activate(h) {
+            h.services.register('no-handler', { push() {} });
+            h.services.register('throws', { handleRequest() { throw new Error('boom'); } });
+            return () => {};
+        },
+    }));
+    engine.register(stubModule('consumer', { activate(h) { host = h; return () => {}; } }));
+    await engine.start();
+
+    await assert.doesNotReject(async () => {
+        assert.equal(await host.services.ask('does-not-exist', 'x', {}), undefined);
+        assert.equal(await host.services.ask('no-handler', 'x', {}), undefined);
+        assert.equal(await host.services.ask('throws', 'x', {}), undefined);
+    });
+});
+
 test('a module can unregister its own service explicitly, but not one it does not own', async () => {
     const engine = makeEngine();
     let ownerHost;

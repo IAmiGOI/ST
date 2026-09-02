@@ -137,6 +137,57 @@ export function describeBlockForBus(block) {
     };
 }
 
+// --- Scene classification (the pull half of Tracker's service, alongside track()'s
+// push half): any module can ask `host.services.ask('tracker', 'classify', { vocabulary })`
+// to have Tracker run ONE SideCar call and pick which of the ASKER's own keys match
+// the current scene. Tracker doesn't own the vocabulary — the asker supplies it (e.g.
+// Music's up-to-50 mood/location keys) — Tracker only owns the classification step,
+// so this is reusable by any future module that needs "which of my keys fit right now".
+
+const MAX_CLASSIFY_VOCABULARY = 50;
+
+/** Trims, dedupes, and caps a caller-supplied key list at MAX_CLASSIFY_VOCABULARY. */
+export function sanitizeVocabulary(vocabulary) {
+    const seen = new Set();
+    const result = [];
+    for (const raw of Array.isArray(vocabulary) ? vocabulary : []) {
+        const key = String(raw ?? '').trim();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        result.push(key);
+        if (result.length >= MAX_CLASSIFY_VOCABULARY) break;
+    }
+    return result;
+}
+
+/** Builds the SideCar request for "which of these keys fit the current scene". */
+export function buildClassifyRequest(vocabulary, chat) {
+    const recent = (chat ?? [])
+        .filter(item => !item.is_system)
+        .slice(-10)
+        .map(item => `${item.is_user ? 'Player' : 'Character'}: ${String(item.mes ?? '').slice(0, 900)}`)
+        .join('\n\n');
+    return {
+        systemPrompt: `You classify the CURRENT scene of a roleplay chat using a fixed set of keys. Available keys: ${vocabulary.join(', ')}. Pick every key from that exact list that genuinely applies to the current scene — as many or as few as fit, none if nothing fits. Return ONLY a JSON array of strings, using ONLY keys from the list above, spelled exactly as given. No markdown, no explanation.`,
+        prompt: `RECENT CONTEXT:\n${recent}\n\nReturn the matching keys as a JSON array.`,
+    };
+}
+
+/** Parses the SideCar reply, keeping only strings that are actually in the asker's vocabulary — the model cannot invent a key that doesn't exist. */
+export function parseClassifyResponse(value, vocabulary) {
+    const raw = String(value ?? '').replace(/```(?:json)?|```/gi, '').trim();
+    const start = raw.indexOf('[');
+    const end = raw.lastIndexOf(']');
+    if (start < 0 || end < start) return { keys: [] };
+    try {
+        const parsed = JSON.parse(raw.slice(start, end + 1));
+        const keys = Array.isArray(parsed) ? parsed.filter(key => typeof key === 'string' && vocabulary.includes(key)) : [];
+        return { keys };
+    } catch {
+        return { keys: [] };
+    }
+}
+
 /** `{{tracker_vitals_health}}`-safe macro name from a block title + field name. */
 function macroSlug(...parts) {
     return ['tracker', ...parts].join('_')
@@ -523,6 +574,16 @@ export const trackerModule = {
                         publishQuickIndex();
                     },
                 });
+            },
+            // The pull half: host.services.ask('tracker', 'classify', { vocabulary, profileId? })
+            // -> { keys } — asker supplies the vocabulary (≤50 keys), Tracker supplies one SideCar call.
+            async handleRequest(type, payload) {
+                if (type !== 'classify') throw new Error(`Tracker does not support request type "${type}".`);
+                const vocabulary = sanitizeVocabulary(payload?.vocabulary);
+                if (!vocabulary.length || !host.sidecar.isConfigured()) return { keys: [] };
+                const built = buildClassifyRequest(vocabulary, host.context().chat);
+                const text = await host.sidecar.request({ ...built, profileId: payload?.profileId ?? 'default' });
+                return parseClassifyResponse(text, vocabulary);
             },
         });
         publishQuickIndex();

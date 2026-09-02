@@ -2,6 +2,7 @@ import { ModuleEngine } from './core/module-engine.js';
 import { notebookModule } from './modules/notebook/index.js';
 import { timeModule } from './modules/time/index.js';
 import { trackerModule } from './modules/tracker/index.js';
+import { musicModule } from './modules/music/index.js';
 
 // The drawer lives in JavaScript so the extension works regardless of its
 // installation folder name and never depends on a fetched template file.
@@ -30,6 +31,7 @@ async function init() {
     engine.register(notebookModule);
     engine.register(timeModule);
     engine.register(trackerModule);
+    engine.register(musicModule);
     await engine.start();
 
     const target = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
@@ -37,7 +39,7 @@ async function init() {
     if (!document.getElementById('st_module_engine')) target.insertAdjacentHTML('beforeend', SETTINGS_HTML);
     engine.mount(document.getElementById('st_module_engine'));
     window.STModuleEngine = engine;
-    console.info('[ST Module Engine] Started with Notebook, RP Time and Tracker modules.');
+    console.info('[ST Module Engine] Started with Notebook, RP Time, Tracker and Music modules.');
 }
 
 jQuery(async () => {
