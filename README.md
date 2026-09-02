@@ -61,7 +61,7 @@ A lease is intentionally lightweight: it does **not** hold an HTTP connection or
 
 ### RP Time settings
 
-The **RP Time** module has a form for **Starting time** and **Time format**. Starting time initializes a new chat's time state; each accepted SideCar result becomes that chat's next current time. The format is included in the SideCar instruction, so use an explicit setting convention such as `Day {day}, HH:MM`, `YYYY-MM-DD HH:MM`, or `Morning of {date}`.
+The **RP Time** module uses the shared SideCar **Max tokens** sampler setting (it does not impose its former 48-token limit), which gives reasoning models enough room to finish and return a label. The **RP Time** module has a form for **Starting time** and **Time format**. Starting time initializes a new chat's time state; each accepted SideCar result becomes that chat's next current time. The format is included in the SideCar instruction, so use an explicit setting convention such as `Day {day}, HH:MM`, `YYYY-MM-DD HH:MM`, or `Morning of {date}`.
 
 ### SideCar sampler
 

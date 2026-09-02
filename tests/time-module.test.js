@@ -15,7 +15,8 @@ test('RP Time builds context for SideCar without asking it to rewrite the respon
     assert.match(request.systemPrompt, /Return only one time label/);
     assert.match(request.prompt, /Player: We leave at dawn/);
     assert.match(request.prompt, /LATEST CHARACTER RESPONSE/);
-    assert.equal(request.maxTokens, 48);
+    assert.equal(request.maxTokens, undefined);
+    assert.equal(request.temperature, undefined);
 });
 
 test('RP Time changes only the message tail and never appends twice', () => {

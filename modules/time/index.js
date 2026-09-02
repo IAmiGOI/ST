@@ -10,7 +10,7 @@ export function buildTimeRequest(chat, message, settings = TIME_DEFAULTS, curren
     const recent = (chat ?? []).filter(item => !item.is_system).slice(-8).map(item => `${item.is_user ? 'Player' : 'Character'}: ${String(item.mes ?? '').slice(0, 700)}`).join('\n\n');
     return {
         systemPrompt: `You are an RPG time tracker. The configured time format is "${settings.format}". The current known in-world time is "${currentTime}". Infer the next current in-world time from the RP context. Return only one time label in the configured format. Do not explain, quote dialogue, or use brackets.`,
-        prompt: `ROLEPLAY CONTEXT:\n${recent}\n\nLATEST CHARACTER RESPONSE:\n${String(message.mes ?? '').slice(0, 1200)}\n\nReturn the current in-world time label only.`, maxTokens: 48, temperature: 0,
+        prompt: `ROLEPLAY CONTEXT:\n${recent}\n\nLATEST CHARACTER RESPONSE:\n${String(message.mes ?? '').slice(0, 1200)}\n\nReturn the current in-world time label only.`,
     };
 }
 
@@ -36,8 +36,8 @@ export const timeModule = {
             const context = host.context(); const resolved = resolveMessage(context.chat ?? [], messageId); const settings = host.moduleSettings(TIME_DEFAULTS);
             if (!resolved?.message || resolved.message.is_user || resolved.message.is_system || resolved.message.extra?.[TIME_EXTRA_KEY]) return;
             running = true;
-            try { const time = await sidecar.request(buildTimeRequest(context.chat, resolved.message, settings, getCurrentTime(context, settings))); if (appendTime(resolved.message, time)) { setCurrentTime(context, normalizeTime(time)); updateMessage(context, resolved.index, resolved.message); } }
-            catch (error) { console.error('[ST Module Engine] RP Time SideCar request failed:', error); } finally { running = false; }
+            try { const time = await sidecar.request(buildTimeRequest(context.chat, resolved.message, settings, getCurrentTime(context, settings))); if (!appendTime(resolved.message, time)) throw new Error('SideCar returned no usable time label. Increase SideCar Max tokens for reasoning models.'); setCurrentTime(context, normalizeTime(time)); updateMessage(context, resolved.index, resolved.message); }
+            catch (error) { console.error('[ST Module Engine] RP Time SideCar request failed:', error); host.toast('warning', error?.message || 'Could not determine RP time.', 'RP Time'); } finally { running = false; }
         });
         return () => { unsubscribe(); sidecar.release(); };
     },
