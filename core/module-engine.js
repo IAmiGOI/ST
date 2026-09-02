@@ -389,6 +389,25 @@ export class ModuleEngine {
                  * shape, with no per-service code in the engine to make that true.
                  */
                 request: (name) => this.#services.get(name)?.api ?? createVoidService(name, module.id),
+                /**
+                 * The pull half of the protocol — push is `register()`+ad hoc methods
+                 * like `track()` above; this is a provider ANSWERING a typed question.
+                 * A provider opts in by exposing `handleRequest(type, payload, askerId)`
+                 * on the object it registered; `type` is a string the provider defines
+                 * and documents (its own request vocabulary), `payload` is whatever
+                 * shape that type expects. Always resolves — never rejects — even if
+                 * the service is missing, doesn't support `handleRequest`, doesn't
+                 * recognize `type`, or its handler throws: each of those logs a
+                 * warning and resolves to `undefined`, so a consumer never needs a
+                 * try/catch just to ask a question that might not be answerable.
+                 */
+                ask: async (name, type, payload) => {
+                    const entry = this.#services.get(name);
+                    if (!entry) { console.warn(`[ST Module Engine][${module.id}] ask("${name}", "${type}") ignored — service not available.`); return undefined; }
+                    if (typeof entry.api.handleRequest !== 'function') { console.warn(`[ST Module Engine][${module.id}] Service "${name}" does not answer requests (no handleRequest).`); return undefined; }
+                    try { return await entry.api.handleRequest(type, payload, module.id); }
+                    catch (error) { this.#log('error', module.id, `ask("${name}", "${type}") failed: ${error?.message || String(error)}`, error); return undefined; }
+                },
             }),
             onEvent: (eventType, listener) => {
                 const context = this.getContext();
