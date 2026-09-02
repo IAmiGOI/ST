@@ -75,3 +75,8 @@ SideCar sampler controls are sliders for temperature, Top P, Top K, Min P, Typic
 ### SideCar reasoning
 
 For OpenRouter endpoints, the **Reasoning** section exposes provider default/enabled/disabled mode, low/medium/high effort, a reasoning-token budget, and an option to hide reasoning text from the reply. These fields are included only when the endpoint contains `openrouter.ai`; other providers keep their native behaviour.
+
+
+### SideCar Manager
+
+The SideCar Manager can create multiple independently configured workers. A request from a module enters the manager queue; the manager dispatches it to a free worker and, when all workers are busy, keeps the queue ordered for the worker that becomes free first. Endpoint, API key and model belong to each worker; sampler/reasoning profiles are stored with that worker.

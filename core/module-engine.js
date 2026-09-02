@@ -1,4 +1,4 @@
-import { SidecarService } from './sidecar-service.js';
+import { SidecarManager } from './sidecar-manager.js';
 import { ModuleDataBus } from './data-bus.js';
 
 const SETTINGS_KEY = 'st_module_engine';
@@ -19,7 +19,7 @@ export class ModuleEngine {
 
     constructor(getContext) {
         this.getContext = getContext;
-        this.sidecar = new SidecarService(() => this.settings(), () => this.saveSettings());
+        this.sidecar = new SidecarManager(() => this.settings(), () => this.saveSettings());
     }
 
     register(module) {
@@ -172,9 +172,9 @@ export class ModuleEngine {
 
         const baseCard = document.createElement('details'); baseCard.className = 'stme-base-card'; baseCard.open = !layout.collapsed.sidecar;
         baseCard.addEventListener('toggle', () => { layout.collapsed.sidecar = !baseCard.open; this.saveSettings(); });
-        const baseHeader = document.createElement('summary'); baseHeader.className = 'stme-module-header'; baseHeader.innerHTML = '<div><strong>SideCar</strong><small>Shared model and sampler settings for all modules.</small></div>';
+        const baseHeader = document.createElement('summary'); baseHeader.className = 'stme-module-header'; baseHeader.innerHTML = '<div><strong>SideCar Manager</strong><small>Balanced shared model workers and profiles for all modules.</small></div>';
         const baseContent = document.createElement('div'); baseCard.append(baseHeader, baseContent); baseList.append(baseCard);
-        this.sidecar.render(baseContent, (level, message, title) => this.#toast(level, message, title), false);
+        this.sidecar.render(baseContent, (level, message, title) => this.#toast(level, message, title));
     }
 
     #hostFor(module) {
