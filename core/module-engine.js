@@ -177,6 +177,26 @@ export class ModuleEngine {
         const baseHeader = document.createElement('summary'); baseHeader.className = 'stme-module-header'; baseHeader.innerHTML = '<div><strong>SideCar Manager</strong><small>Balanced shared model workers and profiles for all modules.</small></div>';
         const baseContent = document.createElement('div'); baseCard.append(baseHeader, baseContent); baseList.append(baseCard);
         this.sidecar.render(baseContent, (level, message, title) => this.#toast(level, message, title));
+        this.#renderModuleLoader(baseList);
+    }
+
+    async #loadRemoteModule(url) {
+        const raw = String(url).trim().replace('github.com/', 'raw.githubusercontent.com/').replace('/blob/', '/');
+        const response = await fetch(raw);
+        if (!response.ok) throw new Error(`Module download failed: HTTP ${response.status}`);
+        const source = await response.text();
+        const blob = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+        try { const imported = await import(blob); const module = imported.default ?? imported.module; this.register(module); await this.enable(module.id); } finally { URL.revokeObjectURL(blob); }
+    }
+
+    #renderModuleLoader(container) {
+        const card = document.createElement('details'); card.className = 'stme-base-card';
+        const summary = document.createElement('summary'); summary.className = 'stme-module-header'; summary.innerHTML = '<div><strong>Module loader</strong><small>Load a self-contained module from a GitHub raw URL.</small></div>';
+        const content = document.createElement('div'); content.className = 'stme-module-content stme-loader';
+        content.innerHTML = '<input class="text_pole" type="url" placeholder="https://raw.githubusercontent.com/user/repo/main/module.js"><button class="menu_button" type="button">Load module</button>';
+        const input = content.querySelector('input'); const button = content.querySelector('button');
+        button.addEventListener('click', async () => { button.disabled = true; try { await this.#loadRemoteModule(input.value); this.#toast('success', 'Module loaded.', 'ST Module Engine'); this.refresh(); } catch (error) { this.#log('error', 'loader', error?.message || String(error), error); this.#toast('error', error?.message || String(error), 'Module loader'); } finally { button.disabled = false; } });
+        card.append(summary, content); container.append(card);
     }
 
     #hostFor(module) {
