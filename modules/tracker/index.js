@@ -136,6 +136,16 @@ export function describeBlockForBus(block) {
     };
 }
 
+/** `{{tracker_vitals_health}}`-safe macro name from a block title + field name. */
+function macroSlug(...parts) {
+    return ['tracker', ...parts].join('_')
+        .toLowerCase()
+        .replace(/[^a-z0-9_]+/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '')
+        .slice(0, 60);
+}
+
 function createBlock() {
     return {
         id: `tracker_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -465,11 +475,34 @@ export const trackerModule = {
         // This is the ONLY place tracked fields leave the module — never into
         // `message.mes` or anything sent to the character LLM, only onto `host.data`,
         // which other modules or this module's own floating panel can read or subscribe to.
+        // Reservation makes each channel a checked contract instead of a bare value:
+        // a shape schema (rejects a malformed write instead of corrupting the HUD/macro),
+        // and — for the per-field channels — a registered ST macro (block kind 2: readable
+        // anywhere ST itself resolves {{macros}} — prompts, World Info, character cards,
+        // Quick Replies) plus `persist: true` so the value survives a page reload.
         const publish = () => {
             const settings = host.moduleSettings(MODULE_DEFAULTS);
+
+            host.data.reserve('blocks', { name: 'Tracker blocks index', schema: { type: 'array' } });
             host.data.set('blocks', settings.blocks.map(describeBlockForBus));
+
             for (const block of settings.blocks) {
-                host.data.set(`block:${block.id}`, { ...describeBlockForBus(block), state: store.get(block.id), updatedAt: Date.now() });
+                const state = store.get(block.id);
+                const fields = sanitizeFields(block.fields).map(field => field.name);
+
+                host.data.reserve(`block:${block.id}`, { name: `Tracker: ${block.title}`, schema: { type: 'object' }, persist: true });
+                host.data.set(`block:${block.id}`, { ...describeBlockForBus(block), state, updatedAt: Date.now() });
+
+                for (const fieldName of fields) {
+                    const fieldKey = `field:${block.id}:${fieldName}`;
+                    host.data.reserve(fieldKey, {
+                        name: `${block.title} — ${fieldName}`,
+                        schema: { type: 'string' },
+                        macro: macroSlug(block.title, fieldName),
+                        persist: true,
+                    });
+                    if (state[fieldName]) host.data.set(fieldKey, state[fieldName]);
+                }
             }
         };
         host.data.set('publish', publish);
@@ -629,10 +662,11 @@ export const trackerModule = {
             for (const unsub of blockSubs.values()) unsub();
             unmakeDraggable();
             hud.remove();
-            host.data.remove('hudPanel');
-            host.data.remove('publish');
-            host.data.remove('blocks');
-            for (const block of host.moduleSettings(MODULE_DEFAULTS).blocks) host.data.remove(`block:${block.id}`);
+            // No manual host.data.remove() calls needed here: the engine calls
+            // releaseNamespace('tracker') right after this cleanup runs, which drops
+            // every value AND unreserves every channel (unregistering its macro, in
+            // one place) this module owns — including ones a future edit here might
+            // forget to list by hand.
         };
     },
 

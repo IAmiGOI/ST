@@ -33,7 +33,7 @@ function setAttr(el, key, value) {
     el.setAttribute(key, value === true ? '' : String(value));
 }
 
-const DOM_PROPS = new Set(['value', 'checked', 'disabled', 'selected', 'textContent', 'className', 'open']);
+const DOM_PROPS = new Set(['value', 'checked', 'disabled', 'selected', 'textContent', 'className', 'open', 'hidden']);
 
 function applyProp(el, key, value) {
     if (key.startsWith('on:')) { el.addEventListener(key.slice(3), value); return; }
