@@ -206,9 +206,14 @@ function renderBlockContent(block, store, profiles, host) {
                 <label>User prompt <textarea class="text_pole" data-field="promptTemplate" rows="3"></textarea></label>
             </div>
         </details>
-        <label>Display template <small>optional — leave empty for an automatic "name: value" list</small>
+        <div class="stme-tracker-display">
+            <div class="stme-tracker-display-head">
+                <strong>Display template</strong>
+                <small>Optional — leave empty for an automatic "name: value" list. Click a token to insert its address.</small>
+            </div>
             <input class="text_pole" data-field="displayTemplate" placeholder="&#10084; {health} &middot; &#128205; {location}">
-        </label>
+            <div class="stme-tracker-tokens"></div>
+        </div>
         <div class="stme-tracker-current"><strong>Current state</strong><span class="stme-tracker-current-value"></span></div>
         <div class="stme-tracker-actions">
             <button class="menu_button" data-action="save" type="button">Save tracker</button>
@@ -250,9 +255,38 @@ function renderBlockContent(block, store, profiles, host) {
 
     wrap.querySelector('[data-field="systemPromptTemplate"]').value = block.systemPromptTemplate;
     wrap.querySelector('[data-field="promptTemplate"]').value = block.promptTemplate;
-    wrap.querySelector('[data-field="displayTemplate"]').value = block.displayTemplate;
 
     const fieldNames = sanitizeFields(block.fields).map(field => field.name);
+
+    const displayInput = wrap.querySelector('[data-field="displayTemplate"]');
+    displayInput.value = block.displayTemplate;
+    const tokens = wrap.querySelector('.stme-tracker-tokens');
+    if (!fieldNames.length) {
+        const hint = document.createElement('span');
+        hint.className = 'stme-tracker-empty';
+        hint.textContent = 'Add fields above to get insertable tokens.';
+        tokens.append(hint);
+    } else {
+        for (const name of fieldNames) {
+            const token = document.createElement('button');
+            token.type = 'button';
+            token.className = 'stme-tracker-token';
+            token.title = `Insert {${name}} — this field's address in the template.`;
+            token.innerHTML = `<span class="stme-tracker-token-name"></span><code>{${name}}</code>`;
+            token.querySelector('.stme-tracker-token-name').textContent = name;
+            token.addEventListener('click', () => {
+                const start = displayInput.selectionStart ?? displayInput.value.length;
+                const end = displayInput.selectionEnd ?? displayInput.value.length;
+                const insert = `{${name}}`;
+                displayInput.value = displayInput.value.slice(0, start) + insert + displayInput.value.slice(end);
+                displayInput.focus();
+                const caret = start + insert.length;
+                displayInput.setSelectionRange(caret, caret);
+            });
+            tokens.append(token);
+        }
+    }
+
     const currentState = store.get(block.id);
     wrap.querySelector('.stme-tracker-current-value').textContent = fieldNames.length
         ? (buildLabel(currentState, fieldNames, block.displayTemplate) || '(no data yet)')
@@ -472,6 +506,14 @@ export const trackerModule = {
         .stme-settings .stme-tracker-empty { margin: 0; padding: 8px; opacity: .65; font-size: .9em; }
         .stme-settings .stme-tracker-templates { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
         .stme-settings .stme-tracker-templates label { display: flex; flex-direction: column; gap: 4px; }
+        .stme-settings .stme-tracker-display { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: rgba(0, 0, 0, .06); }
+        .stme-settings .stme-tracker-display-head { display: flex; flex-direction: column; gap: 2px; }
+        .stme-settings .stme-tracker-display-head small { opacity: .7; }
+        .stme-settings .stme-tracker-tokens { display: flex; flex-wrap: wrap; gap: 6px; }
+        .stme-settings .stme-tracker-token { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 65%, var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff))); border-radius: 999px; background: var(--SmartThemeBlurTintColor); font-size: .82em; cursor: pointer; transition: transform .12s ease, filter .12s ease; }
+        .stme-settings .stme-tracker-token:hover { transform: translateY(-1px); filter: brightness(1.12); }
+        .stme-settings .stme-tracker-token-name { font-weight: 600; }
+        .stme-settings .stme-tracker-token code { opacity: .65; }
         .stme-settings .stme-tracker-current { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; background: rgba(0, 0, 0, .06); }
         .stme-settings .stme-tracker-current-value { opacity: .85; overflow-wrap: anywhere; }
         .stme-settings .stme-tracker-actions { display: flex; gap: 8px; }
