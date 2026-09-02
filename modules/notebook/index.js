@@ -1,7 +1,9 @@
 import { createNotebookStore } from './store.js';
+import { h, list, signal, computed, onDispose, Field, TextInput, TextArea, Button } from '../../core/widgets.js';
 
 const TOOL_NAME = 'Notebook';
 const PROMPT_KEY = 'stme_notebook_context';
+const BUS_KEY = 'changed';
 
 export const notebookModule = {
     id: 'notebook',
@@ -15,6 +17,7 @@ export const notebookModule = {
             const { injectionDepth } = store.settings();
             host.setPrompt(PROMPT_KEY, store.prompt(), 1, injectionDepth, 0);
         };
+        const notify = () => host.data.set(BUS_KEY, Date.now());
         host.registerTool({
             name: TOOL_NAME,
             displayName: 'Notebook',
@@ -29,12 +32,12 @@ export const notebookModule = {
             action: async (args) => {
                 try {
                     if (args?.action === 'write') {
-                        const note = store.add(args.title, args.content); inject(); host.refresh();
+                        const note = store.add(args.title, args.content); inject(); notify();
                         return `Saved note "${note.title}" (ID: ${note.id}).${note.removed ? ` Removed ${note.removed} oldest note(s) to stay within capacity.` : ''}`;
                     }
                     if (args?.action === 'update') {
                         if (!args.note_id) return 'update requires note_id.';
-                        const note = store.update(args.note_id, args.title, args.content); inject(); host.refresh();
+                        const note = store.update(args.note_id, args.title, args.content); inject(); notify();
                         return `Updated note "${note.title}" (ID: ${note.id}).`;
                     }
                     return 'Unknown action. Use write or update.';
@@ -43,51 +46,63 @@ export const notebookModule = {
             formatMessage: args => args?.action === 'update' ? 'Updating notebook note…' : 'Saving notebook note…',
             stealth: false,
         });
-        inject();
-        const unsubscribe = host.onChatChanged(inject);
+        inject(); notify();
+        const unsubscribe = host.onChatChanged(() => { inject(); notify(); });
         return () => { unsubscribe(); host.unregisterTool(TOOL_NAME); host.setPrompt(PROMPT_KEY, '', 1, 0, 0); };
     },
 
     render(container, host) {
         const store = createNotebookStore(host.context);
-        const settings = store.settings();
-        container.innerHTML = `
-            <div class="stme-note-status"></div>
-            <div class="stme-note-settings">
-              <label>Maximum notes <input class="text_pole" data-field="maxNotes" type="number" min="1" max="500"></label>
-              <label>Cleanup batch <input class="text_pole" data-field="cleanupBatch" type="number" min="1" max="500"></label>
-              <label>Injection depth (@X) <input class="text_pole" data-field="injectionDepth" type="number" min="0" max="100"></label>
-              <button class="menu_button" data-action="save-settings" type="button">Save settings</button>
-            </div>
-            <div class="stme-note-editor">
-              <input class="text_pole" data-field="title" maxlength="160" placeholder="Note title">
-              <textarea class="text_pole" data-field="content" rows="3" placeholder="Note content"></textarea>
-              <button class="menu_button" data-action="add" type="button"><i class="fa-solid fa-plus"></i> Add note</button>
-            </div>
-            <div class="stme-note-list"></div>`;
-        for (const [key, value] of Object.entries(settings)) container.querySelector(`[data-field="${key}"]`).value = value;
-        const status = container.querySelector('.stme-note-status');
-        const notes = store.notes();
-        status.textContent = `${notes.length} / ${settings.maxNotes} notes · cleanup: ${settings.cleanupBatch} · injection: @${settings.injectionDepth}`;
-        const list = container.querySelector('.stme-note-list');
-        if (!notes.length) list.textContent = 'No notes yet.';
-        for (const note of notes) {
-            const item = document.createElement('article'); item.className = 'stme-note';
-            const heading = document.createElement('strong'); heading.textContent = note.title;
-            const body = document.createElement('div'); body.textContent = note.content;
-            item.append(heading, body); list.append(item);
-        }
-        container.querySelector('[data-action="add"]').addEventListener('click', () => {
-            try {
-                const note = store.add(container.querySelector('[data-field="title"]').value, container.querySelector('[data-field="content"]').value);
-                container.querySelector('[data-field="title"]').value = ''; container.querySelector('[data-field="content"]').value = '';
-                host.setPrompt(PROMPT_KEY, store.prompt(), 1, store.settings().injectionDepth, 0); host.toast('success', `Saved "${note.title}".`); host.refresh();
-            } catch (error) { host.toast('error', error?.message || String(error)); }
-        });
-        container.querySelector('[data-action="save-settings"]').addEventListener('click', () => {
-            store.setSettings(Object.fromEntries(['maxNotes', 'cleanupBatch', 'injectionDepth'].map(key => [key, container.querySelector(`[data-field="${key}"]`).value])));
-            host.setPrompt(PROMPT_KEY, store.prompt(), 1, store.settings().injectionDepth, 0);
-            host.refresh(); host.toast('success', 'Notebook settings saved.');
-        });
+        const notes = signal(store.notes());
+        const settings = signal(store.settings());
+        const sync = () => { notes.set(store.notes()); settings.set(store.settings()); };
+        onDispose(container, host.data.subscribe('notebook', BUS_KEY, sync));
+
+        const status = h('div', { class: 'stme-note-status' },
+            computed(() => `${notes().length} / ${settings().maxNotes} notes · cleanup: ${settings().cleanupBatch} · injection: @${settings().injectionDepth}`));
+
+        // These three only ever change through this very Save button — nothing else
+        // writes them — so they must NOT resync on the 'changed' bus event (a note
+        // added by the AI mid-typing would otherwise silently wipe an unsaved edit here).
+        const maxNotes = signal(settings().maxNotes);
+        const cleanupBatch = signal(settings().cleanupBatch);
+        const injectionDepth = signal(settings().injectionDepth);
+
+        const settingsForm = h('div', { class: 'stme-note-settings' },
+            Field('Maximum notes', TextInput(maxNotes, { type: 'number' })),
+            Field('Cleanup batch', TextInput(cleanupBatch, { type: 'number' })),
+            Field('Injection depth (@X)', TextInput(injectionDepth, { type: 'number' })),
+            Button('Save settings', () => {
+                const next = store.setSettings({ maxNotes: maxNotes.peek(), cleanupBatch: cleanupBatch.peek(), injectionDepth: injectionDepth.peek() });
+                maxNotes.set(next.maxNotes); cleanupBatch.set(next.cleanupBatch); injectionDepth.set(next.injectionDepth);
+                host.setPrompt(PROMPT_KEY, store.prompt(), 1, next.injectionDepth, 0);
+                host.toast('success', 'Notebook settings saved.');
+            }),
+        );
+
+        const titleInput = signal('');
+        const contentInput = signal('');
+        const editor = h('div', { class: 'stme-note-editor' },
+            TextInput(titleInput, { maxlength: 160, placeholder: 'Note title' }),
+            TextArea(contentInput, { rows: 3, placeholder: 'Note content' }),
+            Button('+ Add note', () => {
+                try {
+                    const note = store.add(titleInput.peek(), contentInput.peek());
+                    titleInput.set(''); contentInput.set('');
+                    sync();
+                    host.setPrompt(PROMPT_KEY, store.prompt(), 1, store.settings().injectionDepth, 0);
+                    host.toast('success', `Saved "${note.title}".`);
+                } catch (error) { host.toast('error', error?.message || String(error)); }
+            }),
+        );
+
+        const noteList = h('div', { class: 'stme-note-list' },
+            list(notes, note => note.id, note => h('article', { class: 'stme-note' },
+                h('strong', {}, note.title),
+                h('div', {}, note.content),
+            )),
+        );
+
+        container.append(status, settingsForm, editor, noteList);
     },
 };

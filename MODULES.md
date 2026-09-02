@@ -6,7 +6,7 @@
 
 Движок берёт на себя весь повторяющийся bootstrap: вставку в `#extensions_settings`, слияние дефолтов настроек, enable/disable с изоляцией ошибок и кнопкой **Retry module**, авто-отписку от `eventSource` с перехватом ошибок в колбэках, drag-reorder карточек и, главное, один общий SideCar — модулю не нужно писать свой fetch/auth/config UI для похода к LLM. Это реально убирает boilerplate, который в обычном самостоятельном extension почти никто не делает аккуратно (упавший `init()` там обычно ломает весь скрипт без возможности retry).
 
-Чего движок **не** даёт: он не UI-фреймворк. Внутри `render()` вы пишете тот же `innerHTML` + `querySelector` + `addEventListener`, что и в голом extension — ни компонентной модели, ни биндингов. Расплата за это — дисциплина: `render()` может быть перевызван (`host.refresh()`) в любой момент кем угодно, поэтому любое значение, которое не сохранено в `moduleSettings`/`chatMetadata`/шину, будет молча потеряно при следующей перерисовке. Никогда не держите единственный источник правды в DOM.
+С этой ревизии движок **также включает небольшой UI-фреймворк** (`core/reactive.js` + `core/dom.js` + `core/widgets.js`) — сигналы, `h()`-билдер элементов и готовые компоненты (`Field`, `TextInput`, `Toggle`, `Select`, `SliderField`, `Chip`, `DraggableList`, ...). `render()` теперь вызывается **один раз** за включение модуля (см. ниже), а не при каждом refresh — точечно обновляется только то, что реально изменилось, DOM других модулей и несохранённый ввод пользователя больше не уничтожаются по любому чужому поводу. Писать модуль через `innerHTML` + `querySelector` по-прежнему можно (`container` — обычный DOM-элемент), но так вы теряете и реактивность, и весь смысл единоразового `render()` — свежие модули должны использовать `core/widgets.js`.
 
 ## Быстрая модель работы
 
@@ -74,9 +74,29 @@ activate(host) {
 
 ### `render(container, host)`
 
-Вызывается для отрисовки включённой карточки. Движок пересоздаёт UI при refresh, поэтому храните состояние в настройках, metadata чата или своём модуле, а не в DOM. Внутри `render()` не добавляйте UI напрямую в `document.body` или контейнер ST extension settings — работайте только внутри переданного `container`.
+Вызывается **один раз** — когда модуль включается (и заново, если включить его после отключения, или после `host.refresh()`/Retry). Движок **не** перевызывает `render()` из-за того, что изменился порядок карточек, свернулась/развернулась чужая карточка, или включился/выключился другой модуль — DOM вашей карточки, однажды построенный, живёт нетронутым, пока модуль включён.
 
-Это правило про `render()`, а не про модуль целиком: DOM-код за пределами `container`, созданный из `activate()` как побочный эффект — чата-бейджи (RP Time, Tracker) или отдельная плавающая панель (Tracker HUD) — сознательно разрешён, потому что это другая UI-поверхность со своим жизненным циклом (создаётся один раз в `activate()`, удаляется в cleanup), а не часть карточки настроек, которую движок вправе снести и пересобрать в любой момент.
+Из этого следует главное практическое правило: **весь динамический контент внутри `container` стройте через сигналы (`core/widgets.js`), а не через повторный вызов `render()`.** Прочитайте настройки/metadata один раз в сигналы при построении UI, а дальнейшие изменения проводите через `signal.set(...)` — DOM отреагирует сам, точечно. Если что-то меняется не изнутри этого же `render()` (например, tool action в `activate()`, или сообщение шины от другого модуля), самому `render()` нет способа об этом узнать без явной подписки — используйте `host.data` bus (см. ниже) или `host.onChatChanged()`, вызванные прямо внутри `render()`, и отвяжите их через `onDispose(container, unsubscribe)`, иначе подписка переживёт саму карточку.
+
+```js
+render(container, host) {
+  const settings = host.moduleSettings({ limit: 10 });
+  const limit = signal(settings.limit);           // сигнал — источник правды для DOM
+  const items = signal(loadItems(host));           // список, обновляемый вручную при изменениях
+
+  onDispose(container, host.data.subscribe(host.id, 'changed', () => items.set(loadItems(host))));
+
+  container.append(
+    Field('Limit', TextInput(limit, { type: 'number' })),
+    h('div', {}, list(items, item => item.id, item => h('div', {}, item.title))),
+    Button('Save', () => { settings.limit = Number(limit.peek()); host.saveModuleSettings(); }),
+  );
+}
+```
+
+`host.refresh()` остался как аварийный выход: он принудительно пересобирает **только вашу** карточку (не соседние) — полезно, если что-то пошло не по сигнальной модели и проще всё перестроить, чем разбираться. Хорошо написанный модуль почти никогда его не вызывает.
+
+Внутри `render()` не добавляйте UI напрямую в `document.body` или контейнер ST extension settings — работайте только внутри переданного `container`. Это правило про `render()`, а не про модуль целиком: DOM-код за пределами `container`, созданный из `activate()` как побочный эффект — чат-бейджи (RP Time, Tracker) или отдельная плавающая панель (Tracker HUD) — сознательно разрешён, потому что это другая UI-поверхность со своим жизненным циклом (создаётся один раз в `activate()`, удаляется в cleanup), а не часть карточки настроек.
 
 ## Защита от ошибок
 
@@ -94,7 +114,7 @@ activate(host) {
 | --- | --- |
 | `host.id` | Идентификатор текущего модуля. |
 | `host.context()` | Актуальный `SillyTavern.getContext()`. Используйте только там, где нужен ST API. |
-| `host.refresh()` | Перерисовать общий UI движка. |
+| `host.refresh()` | Принудительно пересобрать `render()` только этого модуля (аварийный выход — обычно не нужен, см. `render()` выше). |
 | `host.toast(level, message, title?)` | Показать ST toastr-уведомление. |
 | `host.moduleSettings(defaults)` | Получить сохраняемые настройки текущего модуля. |
 | `host.saveModuleSettings()` | Сохранить настройки текущего модуля. |
@@ -214,6 +234,49 @@ const profiles = host.sidecar.profiles(); // [{ id, name }, ...]
 
 Для OpenRouter reasoning-поля применяются только к endpoint, содержащему `openrouter.ai`.
 
+## UI-фреймворк: `core/reactive.js` + `core/dom.js` + `core/widgets.js`
+
+Всё, что нужно для `render()`, — импорт из `core/widgets.js` (он же реэкспортирует нужное из `dom.js`/`reactive.js`, отдельно их подключать не нужно).
+
+### Сигналы
+
+```js
+import { signal, computed, effect } from '../../core/widgets.js';
+
+const count = signal(0);       // count() — читать, count.set(5) / count.update(n => n+1) — писать, count.peek() — читать без подписки
+const doubled = computed(() => count() * 2);   // пересчитывается сам при изменении count
+const dispose = effect(() => console.log(doubled()));  // сразу выполняется и перезапускается на каждое изменение зависимостей
+```
+
+Синхронно, без батчинга: `set()` немедленно уведомляет всех, кто читал сигнал внутри `effect`/`computed`. Внутри `h()`-биндингов (ниже) диспоз эффектов происходит автоматически при удалении DOM-узла — вручную `dispose()` вызывать почти никогда не нужно, кроме одноразовых эффектов вне DOM.
+
+### `h()` — построение элементов
+
+```js
+h('div', { class: 'my-class' }, 'text', childNode, anotherSignal);
+```
+
+- Проп `bind:value` / `bind:checked` — двусторонняя привязка сигнала к `<input>`/`<textarea>`/`<select>` (кроме `<select>`, см. `Select()` ниже).
+- Проп-сигнал (`class`, любой другой атрибут) — держится в актуальном состоянии сам.
+- Проп `on:click` и т.п. — обычный `addEventListener`.
+- Ребёнок-сигнал становится живым текстовым узлом.
+- `list(itemsSignal, keyFn, renderItem)` — реактивный keyed-список: при изменении `itemsSignal` переиспользует и переставляет существующие DOM-узлы по ключу, а не пересоздаёт всё — фокус/значение инпутов внутри элемента списка переживают добавление/удаление/реордер СОСЕДНИХ элементов.
+- `show(valueSignal, renderFn)` — реактивно подменяет один узел, когда `valueSignal` меняет значение (для условного «какая секция сейчас показана»).
+
+### Готовые компоненты (`core/widgets.js`)
+
+`Field(label, control, { hint, stack })`, `TextInput(sig, opts)`, `TextArea(sig, opts)`, `Select(valueSig, optionsSig, shape)`, `SliderField(label, sig, { min, max, step })`, `Toggle(label, checkedSig, { hint, onChange })`, `Button(label, onClick, { variant: 'danger' })`, `Chip(content, { onRemove, onClick, title })`, `DraggableList(itemsSig, keyFn, { renderHeader, renderContent, isOpen, onToggleOpen, onReorder, className })`.
+
+`Toggle` — не чекбокс, а настоящий слайдер-переключатель; используйте его для любого on/off вместо `<input type="checkbox">`. По умолчанию двусторонне привязан к сигналу; передайте `onChange(nextChecked, inputEl)`, если переключение должно сначала пройти через что-то ещё (персист, асинхронный вызов, который может упасть и должен откатить визуальное состояние) — так делает переключатель **Enabled** у самого движка (см. `core/module-engine.js`).
+
+`DraggableList` — тот же drag-and-drop-список карточек, что использует сам движок для списка модулей; `modules/tracker/index.js` использует его же для своих трекеров. Не пишите свой drag/drop — переиспользуйте этот.
+
+`Select` специально не построен на `list()`: `<select>` признаёт `<option>` только как своего прямого потомка, обёрточный `<div>` (даже `display:contents`) ломает список опций молча.
+
+### Кросс-замыканий подписки внутри `render()`
+
+`render()` не получает cleanup-функцию (в отличие от `activate()`). Если внутри `render()` вы подписываетесь на что-то внешнее (`host.data.subscribe`, `host.onChatChanged`), привяжите отписку к жизни контейнера через `onDispose(container, unsubscribe)` — иначе подписка переживёт саму карточку и будет копиться при каждом повторном `render()` (после Retry/переключения).
+
 ## Function tools
 
 Для native function calling используйте определение ST и регистрируйте его только в `activate()`:
@@ -245,6 +308,8 @@ RP Time запускает SideCar-запрос на `GENERATION_STARTED`, а р
 - Не сохраняйте секреты в module settings или data bus.
 - Проверяйте отсутствие SideCar-конфигурации через `host.sidecar.isConfigured()`.
 - Не пытайтесь переписывать основной ответ нейросетью для небольших дополнений: сохраняйте данные и добавляйте UI/DOM-кодом, как RP Time.
+- Стройте `render()` через `core/widgets.js` (сигналы + `h()`), а не через `innerHTML`/`querySelector` — `render()` вызывается один раз, и только сигналы дают вам обновление UI после этого.
+- Подписки внутри `render()` (`host.data.subscribe`, `host.onChatChanged`) всегда оборачивайте в `onDispose(container, ...)`.
 
 ## CSS модуля без изменения общего `style.css`
 

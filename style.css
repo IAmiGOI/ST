@@ -84,12 +84,37 @@
 .stme-settings .stme-sidecar-worker > summary { display:flex; align-items:center; justify-content:space-between; gap:8px; }.stme-settings .stme-worker-remove { font-size:.8em; color:#f2b4b4; }
 .stme-settings .stme-loader { display:flex; gap:8px; align-items:center; }.stme-settings .stme-loader input { flex:1; min-width:0; }
 
+/* core/widgets.js: shared building blocks used across every module's render(). */
+.stme-settings .stme-field { display: grid; grid-template-columns: minmax(110px, .4fr) 1fr; gap: 10px; align-items: center; }
+.stme-settings .stme-field.stme-field-stack { display: flex; flex-direction: column; gap: 4px; }
+.stme-settings .stme-field-label { display: flex; flex-direction: column; gap: 1px; }
+.stme-settings .stme-field-label small { opacity: .65; font-weight: normal; }
+
+.stme-settings .stme-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; width: fit-content; }
+.stme-settings .stme-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.stme-settings .stme-switch-track { position: relative; width: 34px; height: 20px; border-radius: 999px; background: var(--SmartThemeBorderColor); transition: background .15s ease; flex-shrink: 0; }
+.stme-settings .stme-switch-track::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s ease; box-shadow: 0 1px 2px rgba(0, 0, 0, .4); }
+.stme-settings .stme-switch input:checked + .stme-switch-track { background: var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)); }
+.stme-settings .stme-switch input:checked + .stme-switch-track::after { transform: translateX(14px); }
+.stme-settings .stme-switch input:focus-visible + .stme-switch-track { outline: 2px solid var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)); outline-offset: 2px; }
+.stme-settings .stme-switch input:disabled + .stme-switch-track { opacity: .5; cursor: not-allowed; }
+.stme-settings .stme-switch-label { display: flex; flex-direction: column; gap: 1px; font-size: .95em; }
+.stme-settings .stme-switch-label small { opacity: .65; font-weight: normal; }
+
+.stme-settings .stme-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 65%, var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff))); border-radius: 999px; background: var(--SmartThemeBlurTintColor); color: inherit; font-size: .82em; cursor: pointer; transition: transform .12s ease, filter .12s ease; }
+.stme-settings .stme-chip:hover { transform: translateY(-1px); filter: brightness(1.12); }
+.stme-settings .stme-chip-remove { opacity: .7; }
+.stme-settings .stme-chip-remove:hover { opacity: 1; }
+
 /* Fill the full width SillyTavern gives the extension panel, and use it responsively. */
 #st_module_engine.stme-settings { width: 100%; max-width: 100%; }
 .stme-settings .inline-drawer-content { padding: 16px; border-radius: 14px; background: linear-gradient(165deg, color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, var(--stme-accent)), var(--SmartThemeBlurTintColor) 60%); border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 65%, var(--stme-accent)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05), 0 10px 28px rgba(0, 0, 0, .2); }
 .stme-settings .inline-drawer-toggle { padding: 2px 2px 10px; }
 .stme-settings .inline-drawer-toggle b { font-size: 1.15em; letter-spacing: .02em; background: linear-gradient(90deg, var(--stme-accent), color-mix(in srgb, var(--stme-accent) 35%, var(--SmartThemeBodyColor))); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .stme-settings .stme-module-list, .stme-settings .stme-base-list { display: grid; grid-template-columns: 1fr; gap: 12px; align-items: start; }
+/* DraggableList's own wrapper div (and its internal list() wrapper) must not
+   count as a grid/flex box itself, or its cards collapse into a single cell. */
+.stme-draggable-list { display: contents; }
 @container (min-width: 640px) {
     .stme-settings .stme-module-list, .stme-settings .stme-base-list { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
 }
