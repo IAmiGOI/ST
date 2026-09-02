@@ -80,3 +80,15 @@ For OpenRouter endpoints, the **Reasoning** section exposes provider default/ena
 ### SideCar Manager
 
 The SideCar Manager can create multiple independently configured workers. A request from a module enters the manager queue; the manager dispatches it to a free worker and, when all workers are busy, keeps the queue ordered for the worker that becomes free first. Endpoint, API key and model belong to each worker; sampler/reasoning profiles are stored with that worker.
+
+## Built-in Tracker module
+
+**Tracker** is disabled by default. Unlike Notebook and RP Time, it hosts any number of independent **tracker blocks** inside its own card — each block is a self-contained tracker with its own SideCar profile, its own prompt templates, and its own field list. Add a block with **+ Add tracker**, drag it by its grip to reorder it, and collapse it like any module card. Each block can be enabled or removed independently.
+
+### Tracker fields
+
+A block's fields are edited as a list, not a comma-separated string: add a field name and an optional instruction (e.g. field `health`, instruction "One of: healthy, injured, critical"). That instruction is sent to SideCar as the reason for that JSON key, so the model knows exactly how to fill it in — the generated system prompt lists every field as `- name: instruction`.
+
+### Tracker requests
+
+On `GENERATION_STARTED`, every enabled block with at least one field sends its own SideCar request (using its own profile) in parallel with generation. After the response completes, each block's reply is parsed for just its whitelisted fields, saved to that block's own slice of chat metadata, and appended as a styled badge under the message — one badge per block that updated.
