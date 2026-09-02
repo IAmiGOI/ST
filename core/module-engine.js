@@ -40,6 +40,13 @@ export class ModuleEngine {
         return settings;
     }
 
+    moduleSettings(id, defaults = {}) {
+        const entry = this.settings().modules[id] ??= {};
+        entry.settings ??= { ...defaults };
+        for (const [key, value] of Object.entries(defaults)) entry.settings[key] ??= value;
+        return entry.settings;
+    }
+
     isEnabled(id) {
         const module = this.#modules.get(id);
         return this.settings().modules[id]?.enabled ?? module.defaultEnabled ?? true;
@@ -88,7 +95,7 @@ export class ModuleEngine {
 
     async setEnabled(id, enabled) {
         if (!this.#modules.has(id)) throw new Error(`Unknown module: ${id}`);
-        this.settings().modules[id] = { enabled };
+        this.settings().modules[id] = { ...this.settings().modules[id], enabled };
         this.saveSettings();
         if (enabled) await this.enable(id);
         else await this.disable(id);
@@ -162,6 +169,8 @@ export class ModuleEngine {
             unregisterTool: (name) => this.getContext().unregisterFunctionTool?.(name),
             toast: (level, message, title = module.title) => this.#toast(level, message, title),
             sidecar: this.sidecar.forModule(module.id),
+            moduleSettings: (defaults = {}) => this.moduleSettings(module.id, defaults),
+            saveModuleSettings: () => this.saveSettings(),
             onEvent: (eventType, listener) => {
                 const context = this.getContext();
                 const eventName = context.eventTypes?.[eventType] ?? eventType;

@@ -12,7 +12,7 @@ test('RP Time builds context for SideCar without asking it to rewrite the respon
         { is_user: true, mes: 'We leave at dawn.' },
         { is_user: false, mes: 'The road is quiet.' },
     ], { mes: 'The sun reaches its highest point.' });
-    assert.match(request.systemPrompt, /Return only a short time label/);
+    assert.match(request.systemPrompt, /Return only one time label/);
     assert.match(request.prompt, /Player: We leave at dawn/);
     assert.match(request.prompt, /LATEST CHARACTER RESPONSE/);
     assert.equal(request.maxTokens, 48);

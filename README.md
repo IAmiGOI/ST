@@ -58,3 +58,11 @@ A lease is intentionally lightweight: it does **not** hold an HTTP connection or
 ## Built-in RP Time module
 
 **RP Time** is disabled by default to avoid unexpected SideCar requests. Enable and configure SideCar first, then enable **RP Time**. After each normal character response, it sends only the recent RP context to SideCar, asks it for a short in-world time label, and changes the stored message with ordinary JavaScript by appending `\n\n[RP Time: …]`. The SideCar is never asked to rewrite the character response. The marker in message metadata prevents a duplicate suffix on the same message.
+
+### RP Time settings
+
+The **RP Time** module has a form for **Starting time** and **Time format**. Starting time initializes a new chat's time state; each accepted SideCar result becomes that chat's next current time. The format is included in the SideCar instruction, so use an explicit setting convention such as `Day {day}, HH:MM`, `YYYY-MM-DD HH:MM`, or `Morning of {date}`.
+
+### SideCar sampler
+
+SideCar sampler controls are sliders for temperature, Top P, Top K, Min P, Typical P, repetition/frequency/presence penalties, max tokens, and seed. Standard OpenAI parameters are sent to OpenAI-compatible endpoints; extended parameters are sent when changed for compatible local/proxy endpoints. Unsupported sampler fields may be ignored or rejected by the provider.
