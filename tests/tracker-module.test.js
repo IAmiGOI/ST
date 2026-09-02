@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     sanitizeFields, describeFields, buildTrackerRequest, parseTrackerResponse, buildLabel, normalizeFieldName,
+    describeBlockForBus,
 } from '../modules/tracker/index.js';
 
 test('sanitizeFields normalizes names, drops duplicates and blanks', () => {
@@ -67,4 +68,21 @@ test('buildLabel falls back to an automatic list when no display template is set
 test('buildLabel uses the display template when provided', () => {
     const label = buildLabel({ health: 'Injured' }, ['health'], 'HP: {health}');
     assert.equal(label, 'HP: Injured');
+});
+
+test('describeBlockForBus exposes only what the bus needs, never prompts or SideCar profile', () => {
+    const block = {
+        id: 'tracker_1', title: 'Vitals', enabled: true,
+        fields: [{ name: 'health', instruction: 'secret reasoning the LLM sees' }],
+        sidecarProfile: 'default', systemPromptTemplate: 'sensitive template', promptTemplate: 'sensitive',
+    };
+    const described = describeBlockForBus(block);
+    assert.deepEqual(described, { id: 'tracker_1', title: 'Vitals', enabled: true, fields: ['health'] });
+    assert.ok(!('sidecarProfile' in described));
+    assert.ok(!('systemPromptTemplate' in described));
+});
+
+test('describeBlockForBus treats a missing enabled flag as enabled, but false stays false', () => {
+    assert.equal(describeBlockForBus({ id: 'a', title: 'A', fields: [] }).enabled, true);
+    assert.equal(describeBlockForBus({ id: 'b', title: 'B', fields: [], enabled: false }).enabled, false);
 });

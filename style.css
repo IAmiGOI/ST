@@ -18,6 +18,9 @@
 .stme-settings .stme-sidecar-fields > label:not(.stme-check) { display: grid; grid-template-columns: minmax(105px, .45fr) 1fr; align-items: center; gap: 10px; }
 .stme-settings .stme-sidecar-fields .stme-check { display: flex; align-items: center; gap: 6px; }
 .stme-settings .stme-time-help { margin: 0; line-height: 1.4; opacity: .85; }
+.stme-settings .stme-time-presets { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.stme-settings .stme-time-presets-label { font-weight: 600; font-size: .85em; opacity: .8; }
+.stme-settings .stme-time-preset-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
 .stme-settings .stme-time-form { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 7px; background: var(--SmartThemeBlurTintColor); }
 .stme-settings .stme-time-form label { display: grid; grid-template-columns: minmax(110px, .4fr) 1fr; gap: 10px; align-items: center; }
 .stme-settings .stme-sampler { border: 1px solid var(--SmartThemeBorderColor); border-radius: 7px; padding: 8px 10px; }
@@ -39,7 +42,7 @@
 .stme-settings .stme-module.stme-dragging { opacity: .45; }
 .stme-settings .stme-module[draggable="true"] > .stme-module-header::before { content: '⠿'; margin-right: 7px; opacity: .55; cursor: grab; }
 /* Polished module workspace */
-.stme-settings { --stme-accent: var(--SmartThemeQuoteColor, #8da8ff); --stme-panel: color-mix(in srgb, var(--SmartThemeBlurTintColor) 86%, var(--stme-accent)); }
+.stme-settings { --stme-accent: var(--SmartThemeQuoteColor, #8da8ff); --stme-panel: color-mix(in srgb, var(--SmartThemeBlurTintColor) 86%, var(--stme-accent)); width: 100%; max-width: 100%; box-sizing: border-box; container-type: inline-size; }
 .stme-settings .inline-drawer-content { padding-top: 8px; }
 .stme-settings .stme-intro { margin: 0 2px 12px; letter-spacing: .01em; }
 .stme-settings .stme-section > h4 { color: var(--stme-accent); text-transform: uppercase; letter-spacing: .08em; font-size: .75em; }
@@ -80,3 +83,16 @@
 .stme-settings .stme-sidecar-manager { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }.stme-settings .stme-sidecar-manager-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:4px 2px; }.stme-settings .stme-sidecar-manager-head small { display:block; max-width:360px; opacity:.7; }.stme-settings .stme-sidecar-worker { border:1px solid var(--SmartThemeBorderColor); border-radius:9px; overflow:hidden; }.stme-settings .stme-sidecar-worker > summary { padding:9px 11px; cursor:pointer; font-weight:700; background:var(--SmartThemeBlurTintColor); }.stme-settings .stme-sidecar-worker .stme-sidecar { margin:0; border:0; border-radius:0; }
 .stme-settings .stme-sidecar-worker > summary { display:flex; align-items:center; justify-content:space-between; gap:8px; }.stme-settings .stme-worker-remove { font-size:.8em; color:#f2b4b4; }
 .stme-settings .stme-loader { display:flex; gap:8px; align-items:center; }.stme-settings .stme-loader input { flex:1; min-width:0; }
+
+/* Fill the full width SillyTavern gives the extension panel, and use it responsively. */
+#st_module_engine.stme-settings { width: 100%; max-width: 100%; }
+.stme-settings .inline-drawer-content { padding: 16px; border-radius: 14px; background: linear-gradient(165deg, color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, var(--stme-accent)), var(--SmartThemeBlurTintColor) 60%); border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 65%, var(--stme-accent)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05), 0 10px 28px rgba(0, 0, 0, .2); }
+.stme-settings .inline-drawer-toggle { padding: 2px 2px 10px; }
+.stme-settings .inline-drawer-toggle b { font-size: 1.15em; letter-spacing: .02em; background: linear-gradient(90deg, var(--stme-accent), color-mix(in srgb, var(--stme-accent) 35%, var(--SmartThemeBodyColor))); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.stme-settings .stme-module-list, .stme-settings .stme-base-list { display: grid; grid-template-columns: 1fr; gap: 12px; align-items: start; }
+@container (min-width: 640px) {
+    .stme-settings .stme-module-list, .stme-settings .stme-base-list { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
+}
+@container (min-width: 980px) {
+    .stme-settings .stme-module-list { grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); }
+}

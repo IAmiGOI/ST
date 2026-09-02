@@ -65,7 +65,7 @@ A lease is intentionally lightweight: it does **not** hold an HTTP connection or
 
 ### RP Time settings
 
-The **RP Time** module uses the shared SideCar **Max tokens** sampler setting (it does not impose its former 48-token limit), which gives reasoning models enough room to finish and return a label. The **RP Time** module has a form for **Starting time** and **Time format**. Starting time initializes a new chat's time state; each accepted SideCar result becomes that chat's next current time. The format is included in the SideCar instruction, so use an explicit setting convention such as `Day {day}, HH:MM`, `YYYY-MM-DD HH:MM`, or `Morning of {date}`.
+The **RP Time** module uses the shared SideCar **Max tokens** sampler setting (it does not impose its former 48-token limit), which gives reasoning models enough room to finish and return a label. The **RP Time** module has a form for **Starting time** and **Time format**. Starting time initializes a new chat's time state; each accepted SideCar result becomes that chat's next current time. The format is included in the SideCar instruction, so use an explicit setting convention such as `Day {day}, HH:MM`, `YYYY-MM-DD HH:MM`, or `Morning of {date}`. Two **presets** fill in a working starting time, format, JSON fields, and display template in one click: a full calendar date (year/month/day/time/period) and a simple day counter (day/time/period). Switching the **SideCar profile** dropdown saves immediately, so a refresh triggered elsewhere (e.g. a chat change) never reverts an unsaved pick.
 
 ### SideCar sampler
 
@@ -92,3 +92,9 @@ A block's fields are edited as a list, not a comma-separated string: add a field
 ### Tracker requests
 
 On `GENERATION_STARTED`, every enabled block with at least one field sends its own SideCar request (using its own profile) in parallel with generation. After the response completes, each block's reply is parsed for just its whitelisted fields, saved to that block's own slice of chat metadata, and appended as a styled badge under the message — one badge per block that updated.
+
+### Tracker data bus and floating panel
+
+Tracker publishes every block's fields and current values onto the shared `host.data` bus under namespace `tracker`: a `blocks` index (`[{ id, title, enabled, fields }]`) and one `block:<id>` entry per block (`{ id, title, enabled, fields, state, updatedAt }`). Any other module can `host.data.read('tracker', 'blocks', [])` or `host.data.subscribe('tracker', 'block:<id>', ...)` to react to tracked state. This is the *only* path tracked fields leave the module — they are never written into `message.mes` or anything sent to the character LLM, so they cannot end up in its context.
+
+To view that bus data, enable **Show floating panel** in the Tracker card. It opens a separate, draggable tab (appended to the page, not the chat transcript) that lists every enabled block's fields and current values, live-updated from the bus. Drag it by its header to reposition it, collapse it with **–**, or hide it with **×** — position and open state persist. It stays off by default; showing it is opt-in.
