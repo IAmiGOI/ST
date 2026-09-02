@@ -11,11 +11,22 @@ export function createNotebookStore(context) {
     const metadata = () => context().chatMetadata;
     const notes = () => (metadata()[METADATA_KEY] ??= []);
     const save = () => context().saveMetadataDebounced?.();
+    // Only ever writes chatMetadata when a value is actually out of range — a
+    // mere read (e.g. inject() on every CHAT_CHANGED) must not mutate chat state.
+    // Previously this clamped and wrote all three fields unconditionally on every
+    // call, so simply switching chats — no note ever touched — silently wrote to
+    // chatMetadata each time. See MODULES.md's note on store `settings()`/`get()`
+    // helpers for why that's the wrong default: a read that behaves like a write
+    // is exactly the kind of thing an engine-level chat-changed storm guard exists
+    // to catch, but it should never be needed for something this avoidable.
     const settings = () => {
         const value = metadata()[SETTINGS_KEY] ??= {};
-        value.maxNotes = clamp(value.maxNotes, 1, 500, defaults.maxNotes);
-        value.cleanupBatch = clamp(value.cleanupBatch, 1, value.maxNotes, defaults.cleanupBatch);
-        value.injectionDepth = clamp(value.injectionDepth, 0, 100, defaults.injectionDepth);
+        const nextMaxNotes = clamp(value.maxNotes, 1, 500, defaults.maxNotes);
+        if (value.maxNotes !== nextMaxNotes) value.maxNotes = nextMaxNotes;
+        const nextCleanupBatch = clamp(value.cleanupBatch, 1, value.maxNotes, defaults.cleanupBatch);
+        if (value.cleanupBatch !== nextCleanupBatch) value.cleanupBatch = nextCleanupBatch;
+        const nextInjectionDepth = clamp(value.injectionDepth, 0, 100, defaults.injectionDepth);
+        if (value.injectionDepth !== nextInjectionDepth) value.injectionDepth = nextInjectionDepth;
         return value;
     };
 

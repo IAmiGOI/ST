@@ -5,6 +5,15 @@ import { createDevPanel } from './dev-panel.js';
 import { resolveModuleUrl } from './module-loader.js';
 
 const SETTINGS_KEY = 'st_module_engine';
+// A module's onChatChanged listener that (directly or via some ST API it calls)
+// causes CHAT_CHANGED to fire again before it's done handling the first one is a
+// real failure mode we've hit in practice — without a guard, that nested fire
+// calls every listener again, which can trigger the same thing again, forming a
+// tight loop that eats memory until the tab or the whole browser locks up. Two
+// independent guards below stop this at the engine level, for every module, not
+// just the one that happened to trigger it:
+const CHAT_CHANGED_BURST_WINDOW_MS = 2000;
+const CHAT_CHANGED_BURST_LIMIT = 8;
 
 /**
  * Lifecycle host for feature modules. A module only knows the small host API
@@ -26,6 +35,9 @@ export class ModuleEngine {
     #data;
     #moduleStyles = new Map();
     #services = new Map();
+    #chatChangedDispatching = false;
+    #chatChangedBurst = [];
+    #chatChangedStormLoggedAt = 0;
 
     #registeredIds = signal([]);
     #layoutVersion = signal(0);
@@ -108,9 +120,51 @@ export class ModuleEngine {
             // Modules that care about the current chat subscribe themselves via
             // onChatChanged() and update their own signals — no engine-wide
             // rebuild needed here any more.
-            const handler = () => { for (const listener of this.#chatListeners) listener(); };
+            const handler = () => this.#dispatchChatChanged();
             context.eventSource.on(context.eventTypes.CHAT_CHANGED, handler);
             this.#subscriptions.push(() => context.eventSource.off?.(context.eventTypes.CHAT_CHANGED, handler));
+        }
+    }
+
+    /**
+     * Runs every onChatChanged() listener, guarded two ways:
+     *  - reentrancy: if a listener's own work (synchronously, or via something ST
+     *    does in reaction to it) causes CHAT_CHANGED to fire again before this
+     *    dispatch returns, the nested call is dropped instead of recursing.
+     *  - burst limit: more than CHAT_CHANGED_BURST_LIMIT fires within
+     *    CHAT_CHANGED_BURST_WINDOW_MS (not normal chat-switching pace) is treated
+     *    as a runaway loop and further dispatches are skipped until the burst
+     *    window quiets down on its own.
+     * Each listener also gets the same per-listener try/catch + rejected-promise
+     * handling as onEvent() — one broken module must not stop another's.
+     */
+    #dispatchChatChanged() {
+        if (this.#chatChangedDispatching) {
+            this.#log('error', 'engine', 'CHAT_CHANGED fired again while still handling the previous one (reentrant) — the nested dispatch was skipped to break a possible infinite loop. A module\'s onChatChanged listener (or something it calls into ST) is likely triggering another CHAT_CHANGED synchronously.');
+            return;
+        }
+        const now = Date.now();
+        this.#chatChangedBurst = this.#chatChangedBurst.filter(at => now - at < CHAT_CHANGED_BURST_WINDOW_MS);
+        this.#chatChangedBurst.push(now);
+        if (this.#chatChangedBurst.length > CHAT_CHANGED_BURST_LIMIT) {
+            if (now - this.#chatChangedStormLoggedAt > CHAT_CHANGED_BURST_WINDOW_MS) {
+                this.#log('error', 'engine', `CHAT_CHANGED fired ${this.#chatChangedBurst.length} times within ${CHAT_CHANGED_BURST_WINDOW_MS}ms — that's a runaway loop, not normal chat-switching. Skipping dispatches until it quiets down; if it keeps recurring, find and fix whatever's re-triggering it.`);
+                this.#chatChangedStormLoggedAt = now;
+            }
+            return;
+        }
+        this.#chatChangedDispatching = true;
+        try {
+            for (const listener of [...this.#chatListeners]) {
+                try {
+                    const result = listener();
+                    Promise.resolve(result).catch(error => this.#log('error', 'engine', `A chat-changed listener failed: ${error?.message || String(error)}`, error));
+                } catch (error) {
+                    this.#log('error', 'engine', `A chat-changed listener failed: ${error?.message || String(error)}`, error);
+                }
+            }
+        } finally {
+            this.#chatChangedDispatching = false;
         }
     }
 
