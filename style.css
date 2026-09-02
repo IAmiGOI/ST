@@ -76,3 +76,4 @@
 #chat .stme-rp-time-icon, .mes .stme-rp-time-icon { display: grid; place-items: center; width: 21px; height: 21px; border-radius: 50%; background: var(--SmartThemeQuoteColor, #8da8ff); color: var(--SmartThemeBodyColor); font-size: 15px; line-height: 1; }
 #chat .stme-rp-time-label, .mes .stme-rp-time-label { color: var(--SmartThemeBodyColor); opacity: .7; font-size: .72em; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
 #chat .stme-rp-time-value, .mes .stme-rp-time-value { color: var(--SmartThemeBodyColor); font-size: 1.12em; font-weight: 700; letter-spacing: .025em; line-height: 1.25; }
+.stme-settings .stme-module-error { display: flex; flex-direction: column; gap: 9px; color: var(--SmartThemeQuoteColor, #e88); border-left: 3px solid currentColor; background: rgba(160, 35, 35, .12); }

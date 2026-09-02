@@ -1,4 +1,5 @@
 import { SidecarService } from './sidecar-service.js';
+import { ModuleDataBus } from './data-bus.js';
 
 const SETTINGS_KEY = 'st_module_engine';
 
@@ -12,6 +13,9 @@ export class ModuleEngine {
     #subscriptions = [];
     #chatListeners = new Set();
     #root;
+    #failures = new Map();
+    #logs = [];
+    #data = new ModuleDataBus();
 
     constructor(getContext) {
         this.getContext = getContext;
@@ -80,8 +84,15 @@ export class ModuleEngine {
         const module = this.#modules.get(id);
         if (!module) throw new Error(`Unknown module: ${id}`);
 
-        const cleanup = await module.activate(this.#hostFor(module));
-        this.#active.set(id, typeof cleanup === 'function' ? cleanup : () => {});
+        try {
+            const cleanup = await module.activate(this.#hostFor(module));
+            this.#active.set(id, typeof cleanup === 'function' ? cleanup : () => {});
+            this.#failures.delete(id);
+            this.#log('info', id, 'Module started.');
+        } catch (error) {
+            this.#failures.set(id, error);
+            this.#log('error', id, `Start failed: ${error?.message || String(error)}`, error);
+        }
         this.refresh();
     }
 
@@ -130,6 +141,7 @@ export class ModuleEngine {
 
         for (const module of this.orderedModules()) {
             const enabled = this.isEnabled(module.id);
+            const failure = this.#failures.get(module.id);
             const card = document.createElement('details');
             card.className = 'stme-module'; card.dataset.moduleId = module.id; card.draggable = true;
             card.open = !layout.collapsed[module.id];
@@ -145,7 +157,8 @@ export class ModuleEngine {
             checkbox.addEventListener('change', async () => { checkbox.disabled = true; try { await this.setEnabled(module.id, checkbox.checked); } catch (error) { checkbox.checked = !checkbox.checked; this.#toast('error', error?.message || String(error), module.title); } finally { checkbox.disabled = false; } });
             control.append(checkbox, document.createTextNode(' Enabled'));
             header.append(title, control); card.append(header);
-            if (enabled) { const content = document.createElement('div'); content.className = 'stme-module-content'; module.render(content, this.#hostFor(module)); card.append(content); }
+            if (failure) { const content = document.createElement('div'); content.className = 'stme-module-content stme-module-error'; content.textContent = `Module did not start: ${failure?.message || String(failure)}`; const retry = document.createElement('button'); retry.className = 'menu_button'; retry.type = 'button'; retry.textContent = 'Retry module'; retry.addEventListener('click', () => { this.#failures.delete(module.id); this.enable(module.id); }); content.append(retry); card.append(content); }
+            else if (enabled) { const content = document.createElement('div'); content.className = 'stme-module-content'; try { module.render(content, this.#hostFor(module)); } catch (error) { this.#failures.set(module.id, error); this.#log('error', module.id, `UI render failed: ${error?.message || String(error)}`, error); content.replaceChildren(); content.classList.add('stme-module-error'); content.textContent = `Module UI failed: ${error?.message || String(error)}`; } card.append(content); }
             list.append(card);
         }
 
@@ -180,18 +193,33 @@ export class ModuleEngine {
             sidecar: this.sidecar.forModule(module.id),
             moduleSettings: (defaults = {}) => this.moduleSettings(module.id, defaults),
             saveModuleSettings: () => this.saveSettings(),
+            data: Object.freeze({
+                get: (key, fallback) => this.#data.get(module.id, key, fallback),
+                set: (key, value) => this.#data.set(module.id, key, value),
+                remove: key => this.#data.remove(module.id, key),
+                read: (namespace, key, fallback) => this.#data.get(namespace, key, fallback),
+                write: (namespace, key, value) => this.#data.set(namespace, key, value),
+                subscribe: (namespace, key, listener) => this.#data.subscribe(namespace, key, listener),
+            }),
             onEvent: (eventType, listener) => {
                 const context = this.getContext();
                 const eventName = context.eventTypes?.[eventType] ?? eventType;
                 if (!context.eventSource?.on) throw new Error('SillyTavern event API is unavailable.');
-                context.eventSource.on(eventName, listener);
-                return () => context.eventSource.off?.(eventName, listener);
+                const guarded = (...args) => { try { const result = listener(...args); Promise.resolve(result).catch(error => this.#log('error', module.id, `Event ${eventType} failed: ${error?.message || String(error)}`, error)); return result; } catch (error) { this.#log('error', module.id, `Event ${eventType} failed: ${error?.message || String(error)}`, error); } };
+                context.eventSource.on(eventName, guarded);
+                return () => context.eventSource.off?.(eventName, guarded);
             },
             onChatChanged: (listener) => {
                 this.#chatListeners.add(listener);
                 return () => this.#chatListeners.delete(listener);
             },
         };
+    }
+
+    #log(level, moduleId, message, error) {
+        const entry = { time: new Date().toISOString(), level, moduleId, message };
+        this.#logs.unshift(entry); this.#logs.length = Math.min(this.#logs.length, 100);
+        console[level === 'error' ? 'error' : 'info'](`[ST Module Engine][${moduleId}] ${message}`, error ?? '');
     }
 
     #toast(level, message, title) {
