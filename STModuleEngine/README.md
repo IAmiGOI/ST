@@ -44,3 +44,7 @@ return () => sidecar.release();
 ```
 
 A lease is intentionally lightweight: it does **not** hold an HTTP connection or run a model continuously. It represents long-lived access to the centrally configured SideCar profile; each `request()` is still an independent generation. This keeps one model configuration under user control while allowing modules to use it on demand or through their full active lifetime.
+
+## Built-in RP Time module
+
+**RP Time** is disabled by default to avoid unexpected SideCar requests. Enable and configure SideCar first, then enable **RP Time**. After each normal character response, it sends only the recent RP context to SideCar, asks it for a short in-world time label, and changes the stored message with ordinary JavaScript by appending `\n\n[RP Time: …]`. The SideCar is never asked to rewrite the character response. The marker in message metadata prevents a duplicate suffix on the same message.

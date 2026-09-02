@@ -1,5 +1,6 @@
 import { ModuleEngine } from './core/module-engine.js';
 import { notebookModule } from './modules/notebook/index.js';
+import { timeModule } from './modules/time/index.js';
 
 const TEMPLATE_PATH = 'third-party/STModuleEngine';
 
@@ -11,6 +12,7 @@ function getContext() {
 async function init() {
     const engine = new ModuleEngine(getContext);
     engine.register(notebookModule);
+    engine.register(timeModule);
     await engine.start();
 
     const context = getContext();

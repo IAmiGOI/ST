@@ -162,6 +162,13 @@ export class ModuleEngine {
             unregisterTool: (name) => this.getContext().unregisterFunctionTool?.(name),
             toast: (level, message, title = module.title) => this.#toast(level, message, title),
             sidecar: this.sidecar.forModule(module.id),
+            onEvent: (eventType, listener) => {
+                const context = this.getContext();
+                const eventName = context.eventTypes?.[eventType] ?? eventType;
+                if (!context.eventSource?.on) throw new Error('SillyTavern event API is unavailable.');
+                context.eventSource.on(eventName, listener);
+                return () => context.eventSource.off?.(eventName, listener);
+            },
             onChatChanged: (listener) => {
                 this.#chatListeners.add(listener);
                 return () => this.#chatListeners.delete(listener);

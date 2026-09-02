@@ -17,3 +17,4 @@
 .stme-settings .stme-sidecar-fields { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
 .stme-settings .stme-sidecar-fields > label:not(.stme-check) { display: grid; grid-template-columns: minmax(105px, .45fr) 1fr; align-items: center; gap: 10px; }
 .stme-settings .stme-sidecar-fields .stme-check { display: flex; align-items: center; gap: 6px; }
+.stme-settings .stme-time-help { margin: 0; line-height: 1.4; opacity: .85; }
