@@ -18,6 +18,8 @@ It is a single SillyTavern extension that hosts independently implemented module
 
 The extension UI separates **Base settings** (the shared SideCar profile) from **Modules**. Every module card can be collapsed independently. Drag a module card by its grip to change its order; the order and collapsed states are saved in the engine settings.
 
+A **⚙ ModuleEngine Developer** button at the very bottom of the drawer opens a separate floating window — draggable, not nested in the drawer at all — listing every registered module's state, every reserved data-bus channel (with its schema/macro/webhook/persist flags and live current value), and the engine's recent log. It reads like its own detached tool rather than another card in this UI, and needs no setup: reserving a channel anywhere makes it show up here automatically.
+
 ## Included module: Notebook
 
 Notebook is enabled by default. It registers the native `Notebook` function tool with `write` and `update` actions, stores notes per chat, and injects them as private working memory. Its settings and notes are managed in the common engine UI. Disabling the module unregisters its tool and clears its prompt injection.

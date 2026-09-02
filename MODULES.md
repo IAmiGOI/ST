@@ -312,6 +312,12 @@ h('div', { class: 'my-class' }, 'text', childNode, anotherSignal);
 
 `render()` не получает cleanup-функцию (в отличие от `activate()`). Если внутри `render()` вы подписываетесь на что-то внешнее (`host.data.subscribe`, `host.onChatChanged`), привяжите отписку к жизни контейнера через `onDispose(container, unsubscribe)` — иначе подписка переживёт саму карточку и будет копиться при каждом повторном `render()` (после Retry/переключения).
 
+## ModuleEngine Developer — floating diagnostic panel
+
+Кнопка **⚙ ModuleEngine Developer** внизу drawer'а (под Base settings и Modules) открывает плавающее окно — список модулей с их состоянием (enabled/disabled/error), все зарезервированные каналы шины с флагами (`schema`/`open`/`{{macro}}`/`push`/`pull`/`persist`) и текущим значением, и последние записи лога движка. Это не модуль — не проходит через `activate()`/`render()`/`host`, не переключается в списке Modules, физически не вложен ни в один drawer (`document.body`, как HUD Tracker). Собирается движком напрямую из `core/dev-panel.js` через небольшой публичный срез самого `ModuleEngine`: `listModuleStates()`, `logs()`, `bus` (геттер на `ModuleDataBus`), `devPanelSettings()`.
+
+Ничего добавлять в свой модуль для этого не нужно — как только канал зарезервирован через `host.data.reserve()`, он автоматически виден в этой панели.
+
 ## Function tools
 
 Для native function calling используйте определение ST и регистрируйте его только в `activate()`:
