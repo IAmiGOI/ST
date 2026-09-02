@@ -2,6 +2,7 @@ import { SidecarManager } from './sidecar-manager.js';
 import { ModuleDataBus } from './data-bus.js';
 import { h, show, signal, computed, effectOn, Button, TextInput, Toggle, DraggableList } from './widgets.js';
 import { createDevPanel } from './dev-panel.js';
+import { resolveModuleUrl } from './module-loader.js';
 
 const SETTINGS_KEY = 'st_module_engine';
 
@@ -24,6 +25,7 @@ export class ModuleEngine {
     #logs = [];
     #data;
     #moduleStyles = new Map();
+    #services = new Map();
 
     #registeredIds = signal([]);
     #layoutVersion = signal(0);
@@ -137,6 +139,9 @@ export class ModuleEngine {
         // Belt-and-suspenders: release every bus channel/macro/pull-timer this module
         // owned, even if its own cleanup() forgot to unreserve something.
         this.#data.releaseNamespace(id);
+        // Same for any service this module registered (e.g. Tracker's 'tracker' service) —
+        // a module that stops providing a service should stop being found by others.
+        for (const [name, entry] of [...this.#services.entries()]) if (entry.ownerId === id) this.#services.delete(name);
         this.#enabledMap.update(map => ({ ...map, [id]: false }));
         this.#errorMap.update(map => { if (!(id in map)) return map; const next = { ...map }; delete next[id]; return next; });
     }
@@ -285,8 +290,8 @@ export class ModuleEngine {
     }
 
     async #loadRemoteModule(url) {
-        const raw = String(url).trim().replace('github.com/', 'raw.githubusercontent.com/').replace('/blob/', '/');
-        const response = await fetch(raw);
+        const resolved = await resolveModuleUrl(url);
+        const response = await fetch(resolved);
         if (!response.ok) throw new Error(`Module download failed: HTTP ${response.status}`);
         const source = await response.text();
         const blob = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
@@ -298,9 +303,9 @@ export class ModuleEngine {
         const busy = signal(false);
         const card = h('details', { class: 'stme-base-card' });
         const header = h('summary', { class: 'stme-module-header' },
-            h('div', {}, h('strong', {}, 'Module loader'), h('small', {}, 'Load a self-contained module from a GitHub raw URL.')));
+            h('div', {}, h('strong', {}, 'Module loader'), h('small', {}, 'Load a self-contained module from a GitHub repo or a direct .js link.')));
         const content = h('div', { class: 'stme-module-content stme-loader' },
-            TextInput(url, { type: 'url', placeholder: 'https://raw.githubusercontent.com/user/repo/main/module.js' }),
+            TextInput(url, { type: 'url', placeholder: 'https://github.com/user/repo (or a direct .js URL)' }),
             Button('Load module', async () => {
                 busy.set(true);
                 try {
@@ -354,6 +359,37 @@ export class ModuleEngine {
                 listChannels: namespace => this.#data.listChannels(namespace),
                 findByName: name => this.#data.findByName(name),
             }),
+            /**
+             * Generic inter-module service registry — the same request/provider
+             * shape as `host.sidecar`, but for a service another MODULE offers
+             * (rather than the engine-native LLM access). ANY module can be a
+             * provider (`register(name, api)` in activate()) or a consumer
+             * (`get`/`request`) of ANY named service — the engine has no built-in
+             * knowledge of what "tracker" or any other service name means; nothing
+             * module-specific is hardcoded here, so this scales to as many
+             * provider/consumer modules as anyone builds without ever touching
+             * this file again. Registrations are released automatically when
+             * their owner is disabled. See MODULES.md for the full contract and
+             * the `track()` example.
+             */
+            services: Object.freeze({
+                register: (name, api) => { this.#services.set(name, { api, ownerId: module.id }); },
+                unregister: (name) => {
+                    const entry = this.#services.get(name);
+                    if (entry?.ownerId === module.id) this.#services.delete(name);
+                },
+                isAvailable: (name) => this.#services.has(name),
+                /** Undefined if `name` isn't currently provided — check before using it, exactly like `host.sidecar.isConfigured()`. */
+                get: (name) => this.#services.get(name)?.api,
+                /**
+                 * Like `get()`, but never undefined: if `name` isn't available, returns
+                 * a "void" object where every property access is a callable that logs
+                 * a warning and returns another void object — so `host.services.request('tracker').track(...).set(...)`
+                 * is always safe to call, chained arbitrarily deep, for ANY service
+                 * shape, with no per-service code in the engine to make that true.
+                 */
+                request: (name) => this.#services.get(name)?.api ?? createVoidService(name, module.id),
+            }),
             onEvent: (eventType, listener) => {
                 const context = this.getContext();
                 const eventName = context.eventTypes?.[eventType] ?? eventType;
@@ -387,4 +423,28 @@ export class ModuleEngine {
     #toast(level, message, title) {
         window.toastr?.[level]?.(message, title);
     }
+}
+
+/**
+ * An infinitely chainable no-op: `voidService.anything(1, 2).another(3).whatever`
+ * never throws — every property access returns a function that logs once and
+ * returns the same void object again. Used by `host.services.request()` so a
+ * consumer of an unavailable service degrades safely without the engine having
+ * to know that service's actual shape (a `track()` call, a `set()` on whatever
+ * `track()` returned, anything) — the alternative would be hand-writing one
+ * stub per service, which is exactly the kind of per-module special-casing
+ * this registry exists to avoid.
+ */
+function createVoidService(name, moduleId) {
+    const proxy = new Proxy(() => proxy, {
+        get: (_target, prop) => {
+            if (prop === Symbol.toPrimitive || prop === Symbol.iterator) return undefined;
+            return (...args) => {
+                console.warn(`[ST Module Engine][${moduleId}] Called "${String(prop)}" on unavailable service "${name}" — ignored.`);
+                return proxy;
+            };
+        },
+        apply: () => proxy,
+    });
+    return proxy;
 }

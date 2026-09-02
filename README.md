@@ -20,6 +20,10 @@ The extension UI separates **Base settings** (the shared SideCar profile) from *
 
 A **⚙ ModuleEngine Developer** button at the very bottom of the drawer opens a separate floating window — draggable, not nested in the drawer at all — listing every registered module's state, every reserved data-bus channel (with its schema/macro/webhook/persist flags and live current value), and the engine's recent log. It reads like its own detached tool rather than another card in this UI, and needs no setup: reserving a channel anywhere makes it show up here automatically.
 
+### Module loader
+
+The **Module loader** card under Base settings accepts either a direct link to a module's `.js` file, or a bare GitHub repository link — `https://github.com/user/repo`, with or without `.git`, and optionally pinned to a branch (`.../tree/branch`). For a repo link it looks for `manifest.json`'s `"js"` field first (the same convention this repository's own manifest.json uses), then `module.js`, then `index.js` at the repo root, and loads whichever it finds. Anything it can't resolve that way — an already-raw `raw.githubusercontent.com` link, or a non-GitHub URL — is fetched as-is, unchanged.
+
 ## Included module: Notebook
 
 Notebook is enabled by default. It registers the native `Notebook` function tool with `write` and `update` actions, stores notes per chat, and injects them as private working memory. Its settings and notes are managed in the common engine UI. Disabling the module unregisters its tool and clears its prompt injection.
@@ -100,5 +104,9 @@ On `GENERATION_STARTED`, every enabled block with at least one field sends its o
 Tracker publishes every block's fields and current values onto the shared `host.data` bus under namespace `tracker`: a `blocks` index and one `block:<id>` entry per block, each reserved with a schema so a malformed value can never reach a subscriber. Any other module can `host.data.read('tracker', 'blocks', [])` or `host.data.subscribe('tracker', 'block:<id>', ...)` to react to tracked state. This is the *only* path tracked fields leave the module — they are never written into `message.mes` or anything sent to the character LLM, so they cannot end up in its context.
 
 Each individual field is also reserved as its own channel and registered as a live SillyTavern macro, `{{tracker_<block title>_<field name>}}` — e.g. a block titled "Vitals" with a `health` field exposes `{{tracker_vitals_health}}`. Because it's a real ST macro, it resolves anywhere SillyTavern itself does macro substitution — prompt templates, World Info entries, character card fields, Quick Replies — not only where this extension explicitly injects text. These field channels also persist into chat metadata, so their macro value survives a page reload before the module gets a chance to re-publish. Disabling Tracker unregisters every macro it owns automatically.
+
+### Tracker as a service: quick tracked values
+
+Tracker isn't only a hand-configured block editor — it also provides a `'tracker'` service (via `host.services`, the same request/provider mechanism as SideCar, generalized to any module) that any other module can call to have a value tracked without a block. The requesting module owns and pushes the value; Tracker only stores and displays it, in a compact **Quick tracked values** section with no editor — since the value comes from another module's code, there's nothing for the user to type there. Each quick value is also a reserved bus channel with its own schema, chat-metadata persistence, and ST macro, exactly like a regular block's fields.
 
 To view that bus data, enable **Show floating panel** in the Tracker card. It opens a separate, draggable tab (appended to the page, not the chat transcript) that lists every enabled block's fields and current values, live-updated from the bus. Drag it by its header to reposition it, collapse it with **–**, or hide it with **×** — position and open state persist. It stays off by default; showing it is opt-in.
