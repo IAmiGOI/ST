@@ -1,6 +1,6 @@
 const TIME_EXTRA_KEY = 'stme_rp_time';
 const MAX_TIME_LENGTH = 120;
-const TIME_DEFAULTS = Object.freeze({ startTime: 'Day 1, 08:00', format: 'Day {day}, HH:MM', sidecarProfile: 'default', jsonFields: 'day,time,period', displayTemplate: 'Day {day} · {time} · {period}' });
+const TIME_DEFAULTS = Object.freeze({ startTime: 'Year 1, Month 1, Day 1, 08:00', format: 'Year {year}, Month {month}, Day {day}, HH:MM', sidecarProfile: 'default', jsonFields: 'year,month,day,time,period', displayTemplate: 'Year {year} · Month {month} · Day {day} · {time} · {period}' });
 
 export function normalizeTime(value) { return String(value ?? '').replace(/```[\s\S]*?```/g, '').replace(/^(?:time|rp time|время)\s*[:—-]\s*/i, '').replace(/[\r\n]+/g, ' ').replace(/["`]/g, '').replace(/^\[|\]$/g, '').trim().slice(0, MAX_TIME_LENGTH); }
 export function buildTimeRequest(chat, settings = TIME_DEFAULTS, currentTime = settings.startTime) {
@@ -35,7 +35,7 @@ export const timeModule = {
         const start = host.onEvent('GENERATION_STARTED', () => { if (pending || !host.sidecar.isConfigured()) return; const context = host.context(); const settings = host.moduleSettings(TIME_DEFAULTS); pending = host.sidecar.request({ ...buildTimeRequest(context.chat, settings, getCurrentTime(context, settings)), profileId: settings.sidecarProfile }).catch(error => ({ error })); });
         const received = host.onEvent('MESSAGE_RECEIVED', async (messageId, type) => {
             if (running || ['swipe', 'continue', 'appendFinal', 'first_message', 'command', 'extension', 'regenerate'].includes(type)) return;
-            const context = host.context(); const resolved = resolveMessage(context.chat ?? [], messageId); const request = pending; pending = null;
+            const context = host.context(); const settings = host.moduleSettings(TIME_DEFAULTS); const resolved = resolveMessage(context.chat ?? [], messageId); const request = pending; pending = null;
             if (!resolved?.message || resolved.message.is_user || resolved.message.is_system || resolved.message.extra?.[TIME_EXTRA_KEY] || !request) return;
             running = true;
             try { const result = await request; if (result?.error) throw result.error; if (!appendTime(resolved.message, result, settings)) throw new Error('SideCar returned no usable time label.'); setCurrentTime(context, resolved.message.extra[TIME_EXTRA_KEY]); updateMessage(context, resolved.index, resolved.message); setTimeout(() => renderBadge(resolved.message.mesid ?? resolved.index, resolved.message.extra[TIME_EXTRA_KEY])); }

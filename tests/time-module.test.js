@@ -13,6 +13,7 @@ test('RP Time builds context for SideCar without asking it to rewrite the respon
         { is_user: false, mes: 'The road is quiet.' },
     ], { mes: 'The sun reaches its highest point.' });
     assert.match(request.systemPrompt, /Return ONLY a JSON object/);
+    assert.match(request.systemPrompt, /year, month, day, time, period/);
     assert.match(request.prompt, /Player: We leave at dawn/);
     assert.match(request.prompt, /character is about to respond/);
     assert.equal(request.maxTokens, undefined);
@@ -21,11 +22,11 @@ test('RP Time builds context for SideCar without asking it to rewrite the respon
 
 test('RP Time changes only the message tail and never appends twice', () => {
     const message = { mes: 'Existing character response.', extra: {} };
-    assert.equal(appendTime(message, 'Day 1, 12:00'), true);
+    assert.equal(appendTime(message, 'Year 1, Month 1, Day 1, 12:00'), true);
     assert.equal(message.mes, 'Existing character response.');
-    assert.equal(message.extra.stme_rp_time, 'Day 1, 12:00');
+    assert.equal(message.extra.stme_rp_time, 'Year 1, Month 1, Day 1, 12:00');
     assert.equal(appendTime(message, 'Day 1, 12:01'), false);
-    assert.equal(message.extra.stme_rp_time, 'Day 1, 12:00');
+    assert.equal(message.extra.stme_rp_time, 'Year 1, Month 1, Day 1, 12:00');
 });
 
 

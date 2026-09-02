@@ -16,6 +16,7 @@ export class ModuleEngine {
     #failures = new Map();
     #logs = [];
     #data = new ModuleDataBus();
+    #moduleStyles = new Map();
 
     constructor(getContext) {
         this.getContext = getContext;
@@ -33,6 +34,7 @@ export class ModuleEngine {
             throw new Error(`Module "${module.id}" is already registered.`);
         }
         this.#modules.set(module.id, module);
+        this.#installModuleCss(module);
         return this;
     }
 
@@ -214,6 +216,15 @@ export class ModuleEngine {
                 return () => this.#chatListeners.delete(listener);
             },
         };
+    }
+
+    #installModuleCss(module) {
+        if (!module.css || this.#moduleStyles.has(module.id) || typeof document === 'undefined') return;
+        const style = document.createElement('style');
+        style.dataset.stmeModule = module.id;
+        style.textContent = String(module.css);
+        document.head.append(style);
+        this.#moduleStyles.set(module.id, style);
     }
 
     #log(level, moduleId, message, error) {

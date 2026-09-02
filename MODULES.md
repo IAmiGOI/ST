@@ -211,3 +211,21 @@ RP Time запускает SideCar-запрос на `GENERATION_STARTED`, а р
 - Не сохраняйте секреты в module settings или data bus.
 - Проверяйте отсутствие SideCar-конфигурации через `host.sidecar.isConfigured()`.
 - Не пытайтесь переписывать основной ответ нейросетью для небольших дополнений: сохраняйте данные и добавляйте UI/DOM-кодом, как RP Time.
+
+## CSS модуля без изменения общего `style.css`
+
+Модуль может экспортировать строковое поле `css`. При `engine.register(module)` движок автоматически создаёт отдельный `<style data-stme-module="module-id">` в `document.head`. Поэтому для нового модуля не нужно редактировать общий `style.css`:
+
+```js
+export const exampleModule = {
+  id: 'example',
+  title: 'Example',
+  css: `
+    .stme-example-card { border-radius: 8px; }
+  `,
+  activate() { return () => {}; },
+  render(container) { /* ... */ },
+};
+```
+
+Используйте префикс класса модуля (`stme-example-*`), чтобы не затронуть интерфейс ST и другие модули.
