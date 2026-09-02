@@ -64,6 +64,23 @@ export function computed(fn) {
     return read;
 }
 
+/**
+ * Runs `fn` with dependency tracking suspended, so any signal it reads is NOT
+ * attributed to whichever effect is currently running. Needed anywhere a callback
+ * invoked from inside an effect's body does its own, unrelated signal reads — e.g.
+ * `show()`/`list()` calling a render callback that reads its own local signals.
+ * `activeEffect` is a single shared module-level variable, so without this a bare
+ * read inside such a callback silently becomes a dependency of the OUTER effect
+ * instead of nothing — a leak that can cause the outer effect to re-run itself
+ * (and, in `show()`'s case, re-invoke the callback, which re-subscribes the same
+ * read again) forever. See MODULES.md's note on `untrack()`.
+ */
+export function untrack(fn) {
+    const previous = activeEffect;
+    activeEffect = null;
+    try { return fn(); } finally { activeEffect = previous; }
+}
+
 export function isSignal(value) {
     return typeof value === 'function' && value.isSignal === true;
 }

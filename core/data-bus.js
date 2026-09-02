@@ -189,7 +189,14 @@ export class ModuleDataBus {
         const entry = (this.#history.get(id) ?? [])[stepsBack];
         if (!entry) return false;
         this.#values.set(id, entry.value);
-        for (const listener of this.#listeners.get(id) ?? []) listener(entry.value);
+        // Snapshot before iterating — a listener firing here may synchronously subscribe a
+        // NEW listener to this same id (e.g. a module re-rendering and re-subscribing inside
+        // its own change handler). Set iteration is live in JS, so without this snapshot the
+        // new listener would be visited in the same pass, which can re-trigger the very code
+        // that subscribed it — a self-sustaining synchronous loop with no stack growth (so it
+        // never throws) that just keeps allocating until the tab hangs. See the identical
+        // comment on #applyWrite below and MODULES.md's bus listener-dispatch note.
+        for (const listener of [...(this.#listeners.get(id) ?? [])]) listener(entry.value);
         return true;
     }
 
@@ -216,7 +223,9 @@ export class ModuleDataBus {
         this.#history.set(id, list);
 
         this.#values.set(id, value);
-        for (const listener of this.#listeners.get(id) ?? []) listener(value);
+        // Snapshot before iterating — see the comment in restore() above for why a live
+        // Set iteration here is the root cause of a real, previously-shipped hang.
+        for (const listener of [...(this.#listeners.get(id) ?? [])]) listener(value);
         if (channel?.persist) this.#writePersisted(id, value);
         if (channel?.webhook?.pushUrl) this.#pushWebhook(channel, value);
         return true;

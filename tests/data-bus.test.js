@@ -256,3 +256,55 @@ test('webhook: pulled external data still goes through schema + ownership valida
         globalThis.fetch = originalFetch;
     }
 });
+
+test('a listener that subscribes a new listener to the same key during dispatch does not run it in the same pass (write)', () => {
+    // Root cause of a real, previously-shipped bug: JS Set iteration is LIVE, so a listener
+    // added mid-dispatch used to be visited in the SAME for..of pass. Combined with a module
+    // re-subscribing on every re-render, this formed a self-sustaining infinite synchronous
+    // loop with no stack growth — RAM climbed until the tab hung. #applyWrite() must snapshot
+    // the listeners before iterating.
+    const bus = new ModuleDataBus();
+    let firstPassCalls = 0;
+    let secondListenerCallsDuringFirstDispatch = 0;
+    const unsubscribeSecond = () => {};
+    let secondSubscribed = false;
+    bus.subscribe('m', 'key', () => {
+        firstPassCalls++;
+        if (!secondSubscribed) {
+            secondSubscribed = true;
+            bus.subscribe('m', 'key', () => { secondListenerCallsDuringFirstDispatch++; });
+        }
+    });
+    bus.set('m', 'key', 1);
+    assert.equal(firstPassCalls, 1, 'the first listener only runs once for this write');
+    assert.equal(secondListenerCallsDuringFirstDispatch, 0, 'a listener subscribed mid-dispatch must not run until the NEXT write');
+    bus.set('m', 'key', 2);
+    assert.equal(secondListenerCallsDuringFirstDispatch, 1, 'it runs normally on a subsequent write');
+    void unsubscribeSecond;
+});
+
+test('a listener that subscribes a new listener to the same key during dispatch does not run it in the same pass (restore)', () => {
+    const bus = new ModuleDataBus();
+    bus.set('m', 'key', 'v1');
+    bus.set('m', 'key', 'v2');
+    let sameDispatchCalls = 0;
+    let subscribed = false;
+    bus.subscribe('m', 'key', () => {
+        if (!subscribed) {
+            subscribed = true;
+            bus.subscribe('m', 'key', () => { sameDispatchCalls++; });
+        }
+    });
+    bus.restore('m', 'key', 1); // rolls back to 'v1'
+    assert.equal(sameDispatchCalls, 0, 'a listener subscribed during restore() dispatch must not run in the same pass');
+});
+
+test('a listener that unsubscribes itself during dispatch does not break iteration for the remaining listeners', () => {
+    const bus = new ModuleDataBus();
+    let secondCalls = 0;
+    let unsubscribeFirst;
+    unsubscribeFirst = bus.subscribe('m', 'key', () => { unsubscribeFirst(); });
+    bus.subscribe('m', 'key', () => { secondCalls++; });
+    bus.set('m', 'key', 1);
+    assert.equal(secondCalls, 1, 'unsubscribing mid-dispatch must not skip a later listener');
+});
