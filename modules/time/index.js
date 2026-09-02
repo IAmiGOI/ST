@@ -1,6 +1,25 @@
 const TIME_EXTRA_KEY = 'stme_rp_time';
 const MAX_TIME_LENGTH = 120;
-const TIME_DEFAULTS = Object.freeze({ startTime: 'Year 1, Month 1, Day 1, 08:00', format: 'Year {year}, Month {month}, Day {day}, HH:MM', sidecarProfile: 'default', jsonFields: 'year,month,day,time,period', displayTemplate: 'Year {year} · Month {month} · Day {day} · {time} · {period}' });
+const TIME_DEFAULTS = Object.freeze({ startTime: 'Year 1, Month 1, Day 1, 08:00 (Morning)', format: 'Year {year}, Month {month}, Day {day}, {time} ({period})', sidecarProfile: 'default', jsonFields: 'year,month,day,time,period', displayTemplate: 'Year {year} · Month {month} · Day {day} · {time} · {period}' });
+
+export const TIME_PRESETS = Object.freeze([
+    {
+        id: 'full-date',
+        name: 'Year · Month · Day · Time · Period',
+        startTime: 'Year 1, Month 1, Day 1, 08:00 (Morning)',
+        format: 'Year {year}, Month {month}, Day {day}, {time} ({period})',
+        jsonFields: 'year,month,day,time,period',
+        displayTemplate: 'Year {year} · Month {month} · Day {day} · {time} · {period}',
+    },
+    {
+        id: 'day-counter',
+        name: 'Day counter · Time · Period',
+        startTime: 'Day 0, 08:00 (Morning)',
+        format: 'Day {day}, {time} ({period})',
+        jsonFields: 'day,time,period',
+        displayTemplate: 'Day {day} · {time} · {period}',
+    },
+]);
 
 export function normalizeTime(value) { return String(value ?? '').replace(/```[\s\S]*?```/g, '').replace(/^(?:time|rp time|время)\s*[:—-]\s*/i, '').replace(/[\r\n]+/g, ' ').replace(/["`]/g, '').replace(/^\[|\]$/g, '').trim().slice(0, MAX_TIME_LENGTH); }
 export function buildTimeRequest(chat, settings = TIME_DEFAULTS, currentTime = settings.startTime) {
@@ -45,9 +64,31 @@ export const timeModule = {
     },
     render(container, host) {
         const settings = host.moduleSettings(TIME_DEFAULTS); const profiles = host.sidecar.profiles();
-        container.innerHTML = `<p class="stme-time-help">The SideCar request starts with generation, then a styled time badge is appended beneath the completed response.</p><div class="stme-time-form"><label>Starting time <input class="text_pole" data-field="startTime" maxlength="120"></label><label>Time format <input class="text_pole" data-field="format" maxlength="120" placeholder="Day {day}, HH:MM"></label><label>SideCar profile <select class="text_pole" data-field="sidecarProfile"></select></label><label>JSON fields <input class="text_pole" data-field="jsonFields" placeholder="day,time,period"></label><label>Display template <input class="text_pole" data-field="displayTemplate" placeholder="Day {day} · {time}"></label><button class="menu_button" data-action="save" type="button">Save time settings</button></div>`;
-        container.querySelector('[data-field="startTime"]').value = settings.startTime; container.querySelector('[data-field="format"]').value = settings.format; container.querySelector('[data-field="jsonFields"]').value = settings.jsonFields; container.querySelector('[data-field="displayTemplate"]').value = settings.displayTemplate;
-        const select = container.querySelector('[data-field="sidecarProfile"]'); for (const profile of profiles) { const option = new Option(profile.name, profile.id); option.selected = profile.id === settings.sidecarProfile; select.add(option); }
-        container.querySelector('[data-action="save"]').addEventListener('click', () => { settings.startTime = normalizeTime(container.querySelector('[data-field="startTime"]').value) || TIME_DEFAULTS.startTime; settings.format = String(container.querySelector('[data-field="format"]').value).trim() || TIME_DEFAULTS.format; settings.sidecarProfile = select.value; settings.jsonFields = String(container.querySelector('[data-field="jsonFields"]').value).trim() || TIME_DEFAULTS.jsonFields; settings.displayTemplate = String(container.querySelector('[data-field="displayTemplate"]').value).trim() || TIME_DEFAULTS.displayTemplate; host.saveModuleSettings(); host.toast('success', 'RP Time settings saved.', 'RP Time'); });
+        container.innerHTML = `<p class="stme-time-help">The SideCar request starts with generation, then a styled time badge is appended beneath the completed response.</p><div class="stme-time-presets"><span class="stme-time-presets-label">Presets</span><div class="stme-time-preset-buttons"></div></div><div class="stme-time-form"><label>Starting time <input class="text_pole" data-field="startTime" maxlength="120"></label><label>Time format <input class="text_pole" data-field="format" maxlength="120" placeholder="Day {day}, HH:MM"></label><label>SideCar profile <select class="text_pole" data-field="sidecarProfile"></select></label><label>JSON fields <input class="text_pole" data-field="jsonFields" placeholder="day,time,period"></label><label>Display template <input class="text_pole" data-field="displayTemplate" placeholder="Day {day} · {time}"></label><button class="menu_button" data-action="save" type="button">Save time settings</button></div>`;
+        const startInput = container.querySelector('[data-field="startTime"]');
+        const formatInput = container.querySelector('[data-field="format"]');
+        const jsonFieldsInput = container.querySelector('[data-field="jsonFields"]');
+        const displayInput = container.querySelector('[data-field="displayTemplate"]');
+        startInput.value = settings.startTime; formatInput.value = settings.format; jsonFieldsInput.value = settings.jsonFields; displayInput.value = settings.displayTemplate;
+
+        const select = container.querySelector('[data-field="sidecarProfile"]');
+        for (const profile of profiles) { const option = new Option(profile.name, profile.id); option.selected = profile.id === settings.sidecarProfile; select.add(option); }
+        // Persist immediately on switch, so a refresh triggered elsewhere (e.g. a chat change) never reverts an unsaved pick.
+        select.addEventListener('change', () => { settings.sidecarProfile = select.value; host.saveModuleSettings(); });
+
+        const presetButtons = container.querySelector('.stme-time-preset-buttons');
+        for (const preset of TIME_PRESETS) {
+            const button = document.createElement('button');
+            button.className = 'menu_button'; button.type = 'button'; button.textContent = preset.name;
+            button.addEventListener('click', () => {
+                startInput.value = preset.startTime; formatInput.value = preset.format; jsonFieldsInput.value = preset.jsonFields; displayInput.value = preset.displayTemplate;
+                settings.startTime = preset.startTime; settings.format = preset.format; settings.jsonFields = preset.jsonFields; settings.displayTemplate = preset.displayTemplate;
+                host.saveModuleSettings();
+                host.toast('success', `Preset "${preset.name}" applied.`, 'RP Time');
+            });
+            presetButtons.append(button);
+        }
+
+        container.querySelector('[data-action="save"]').addEventListener('click', () => { settings.startTime = normalizeTime(startInput.value) || TIME_DEFAULTS.startTime; settings.format = String(formatInput.value).trim() || TIME_DEFAULTS.format; settings.sidecarProfile = select.value; settings.jsonFields = String(jsonFieldsInput.value).trim() || TIME_DEFAULTS.jsonFields; settings.displayTemplate = String(displayInput.value).trim() || TIME_DEFAULTS.displayTemplate; host.saveModuleSettings(); host.toast('success', 'RP Time settings saved.', 'RP Time'); });
     },
 };

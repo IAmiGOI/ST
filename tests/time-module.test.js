@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendTime, buildTimeRequest, normalizeTime, parseTimeResponse } from '../modules/time/index.js';
+import { appendTime, buildTimeRequest, normalizeTime, parseTimeResponse, TIME_PRESETS } from '../modules/time/index.js';
 
 test('RP Time normalizes the one-line SideCar result', () => {
     assert.equal(normalizeTime('Time: "Day 2, 07:30"\nExplanation'), 'Day 2, 07:30 Explanation');
@@ -33,4 +33,16 @@ test('RP Time changes only the message tail and never appends twice', () => {
 test('RP Time parses configured JSON fields into a display label', () => {
     const result = parseTimeResponse('{"day":"Day 2","time":"13:00"}', { jsonFields: 'day,time', displayTemplate: '{day} — {time}' });
     assert.equal(result.label, 'Day 2 — 13:00');
+});
+
+test('RP Time ships two well-formed default presets', () => {
+    assert.equal(TIME_PRESETS.length, 2);
+    for (const preset of TIME_PRESETS) {
+        assert.ok(preset.id && preset.name && preset.startTime && preset.format && preset.jsonFields && preset.displayTemplate);
+        const fields = preset.jsonFields.split(',');
+        for (const field of fields) assert.match(preset.format, new RegExp(`\\{${field}\\}`));
+    }
+    assert.deepEqual(TIME_PRESETS.map(preset => preset.id), ['full-date', 'day-counter']);
+    assert.equal(TIME_PRESETS[0].jsonFields, 'year,month,day,time,period');
+    assert.equal(TIME_PRESETS[1].jsonFields, 'day,time,period');
 });

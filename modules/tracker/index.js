@@ -1,5 +1,6 @@
 import { createTrackerStore } from './store.js';
 
+const MODULE_ID = 'tracker';
 const TRACKER_EXTRA_KEY = 'stme_tracker_snapshot';
 const MAX_FIELD_LENGTH = 200;
 const MAX_FIELD_NAME_LENGTH = 40;
@@ -15,7 +16,12 @@ const DEFAULT_SYSTEM_PROMPT =
     'Return ONLY a JSON object with exactly these keys: {fieldsJson}. No extra keys, no markdown, no explanation.';
 const DEFAULT_PROMPT = 'RECENT CONTEXT:\n{context}\n\nThe character is about to respond. Return the updated JSON object only.';
 
-const MODULE_DEFAULTS = Object.freeze({ blocks: [] });
+const MODULE_DEFAULTS = Object.freeze({
+    blocks: [],
+    // `hud` and `blocks` are reassigned wholesale on every change, never mutated in place —
+    // both come straight from this shared frozen default on first use.
+    hud: { enabled: false, collapsed: false, x: null, y: null },
+});
 
 /** Trims a raw field name and makes it JSON-key safe (no whitespace, bounded length). */
 export function normalizeFieldName(value) {
@@ -110,6 +116,22 @@ export function buildLabel(state, fields, displayTemplate) {
         .join(' · ');
 }
 
+/**
+ * Shape of one tracker block as published on the shared data bus (namespace
+ * "tracker", key `block:<id>`, this description merged with `{ state, updatedAt }`)
+ * and in the `blocks` index. Never includes the block's SideCar profile, prompt
+ * templates, or the raw sanitized field objects — only what other modules or a
+ * visual panel need to read: which fields exist and what to call them.
+ */
+export function describeBlockForBus(block) {
+    return {
+        id: block.id,
+        title: block.title,
+        enabled: block.enabled !== false,
+        fields: sanitizeFields(block.fields).map(field => field.name),
+    };
+}
+
 function createBlock() {
     return {
         id: `tracker_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -162,6 +184,86 @@ function updateMessage(context, index, message) {
     context.saveChat?.();
 }
 
+/**
+ * A standalone, draggable panel appended to document.body — never to the chat
+ * transcript or its DOM — so it can only ever show data pulled from the bus.
+ * It has no path into `message.mes` and is never read by the character LLM.
+ */
+function createHudPanel() {
+    const panel = document.createElement('div');
+    panel.className = 'stme-tracker-hud';
+    panel.innerHTML = `
+        <div class="stme-tracker-hud-head">
+            <span class="stme-tracker-hud-grip">⠿</span>
+            <strong>Tracked state</strong>
+            <button type="button" class="stme-tracker-hud-collapse" title="Collapse">–</button>
+            <button type="button" class="stme-tracker-hud-close" title="Hide panel">×</button>
+        </div>
+        <div class="stme-tracker-hud-body"></div>
+    `;
+    document.body.append(panel);
+    return panel;
+}
+
+function applyHudPosition(panel, settings) {
+    if (Number.isFinite(settings.hud.x) && Number.isFinite(settings.hud.y)) {
+        panel.style.left = `${settings.hud.x}px`;
+        panel.style.top = `${settings.hud.y}px`;
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+    } else {
+        panel.style.right = '20px';
+        panel.style.bottom = '20px';
+        panel.style.left = 'auto';
+        panel.style.top = 'auto';
+    }
+}
+
+/** Drags the panel by its header (grip) and persists the dropped position. Returns a cleanup function. */
+function makeHudDraggable(panel, host) {
+    const head = panel.querySelector('.stme-tracker-hud-head');
+    let dragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    const onPointerDown = event => {
+        if (event.target.closest('button')) return;
+        dragging = true;
+        const rect = panel.getBoundingClientRect();
+        offsetX = event.clientX - rect.left;
+        offsetY = event.clientY - rect.top;
+        head.setPointerCapture(event.pointerId);
+    };
+    const onPointerMove = event => {
+        if (!dragging) return;
+        const x = Math.min(Math.max(0, event.clientX - offsetX), window.innerWidth - panel.offsetWidth);
+        const y = Math.min(Math.max(0, event.clientY - offsetY), window.innerHeight - panel.offsetHeight);
+        panel.style.left = `${x}px`;
+        panel.style.top = `${y}px`;
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+    };
+    const onPointerUp = () => {
+        if (!dragging) return;
+        dragging = false;
+        const settings = host.moduleSettings(MODULE_DEFAULTS);
+        settings.hud = { ...settings.hud, x: parseInt(panel.style.left, 10), y: parseInt(panel.style.top, 10) };
+        host.saveModuleSettings();
+    };
+
+    head.addEventListener('pointerdown', onPointerDown);
+    head.addEventListener('pointermove', onPointerMove);
+    head.addEventListener('pointerup', onPointerUp);
+    head.addEventListener('pointercancel', onPointerUp);
+
+    return () => {
+        head.removeEventListener('pointerdown', onPointerDown);
+        head.removeEventListener('pointermove', onPointerMove);
+        head.removeEventListener('pointerup', onPointerUp);
+        head.removeEventListener('pointercancel', onPointerUp);
+    };
+}
+
 function renderFieldRow(block, field, host) {
     const row = document.createElement('div');
     row.className = 'stme-tracker-field-row';
@@ -180,6 +282,7 @@ function renderFieldRow(block, field, host) {
     row.querySelector('.stme-worker-remove').addEventListener('click', () => {
         block.fields = block.fields.filter(item => item !== field);
         host.saveModuleSettings();
+        host.data.get('publish')?.();
         host.refresh();
     });
     return row;
@@ -239,6 +342,7 @@ function renderBlockContent(block, store, profiles, host) {
         if (block.fields.some(item => item.name === name)) { host.toast('warning', `Field "${name}" already exists.`, block.title); return; }
         block.fields = [...block.fields, { name, instruction: String(instructionInput.value ?? '').trim().slice(0, MAX_INSTRUCTION_LENGTH) }];
         host.saveModuleSettings();
+        host.data.get('publish')?.();
         host.refresh();
     };
     wrap.querySelector('[data-action="add-field"]').addEventListener('click', addField);
@@ -298,12 +402,14 @@ function renderBlockContent(block, store, profiles, host) {
         block.promptTemplate = String(wrap.querySelector('[data-field="promptTemplate"]').value).trim() || DEFAULT_PROMPT;
         block.displayTemplate = String(wrap.querySelector('[data-field="displayTemplate"]').value).trim();
         host.saveModuleSettings();
+        host.data.get('publish')?.();
         host.toast('success', `"${block.title}" saved.`, 'Tracker');
         host.refresh();
     });
 
     wrap.querySelector('[data-action="reset"]').addEventListener('click', () => {
         store.reset(block.id);
+        host.data.get('publish')?.();
         host.toast('success', `Tracked state cleared for "${block.title}".`, 'Tracker');
         host.refresh();
     });
@@ -337,17 +443,19 @@ function renderBlockCard(block, settings, store, profiles, host) {
     const titleInput = header.querySelector('.stme-tracker-title-input');
     titleInput.value = block.title;
     titleInput.addEventListener('click', event => event.stopPropagation());
-    titleInput.addEventListener('change', () => { block.title = titleInput.value.trim() || 'Tracker'; host.saveModuleSettings(); });
+    titleInput.addEventListener('change', () => { block.title = titleInput.value.trim() || 'Tracker'; host.saveModuleSettings(); host.data.get('publish')?.(); });
 
     const enabledCheckbox = header.querySelector('.stme-toggle input');
     enabledCheckbox.checked = block.enabled;
     enabledCheckbox.addEventListener('click', event => event.stopPropagation());
-    enabledCheckbox.addEventListener('change', () => { block.enabled = enabledCheckbox.checked; host.saveModuleSettings(); });
+    enabledCheckbox.addEventListener('change', () => { block.enabled = enabledCheckbox.checked; host.saveModuleSettings(); host.data.get('publish')?.(); });
 
     header.querySelector('.stme-worker-remove').addEventListener('click', event => {
         event.preventDefault(); event.stopPropagation();
         settings.blocks = settings.blocks.filter(item => item.id !== block.id);
         host.saveModuleSettings();
+        host.data.remove(`block:${block.id}`);
+        host.data.get('publish')?.();
         host.refresh();
     });
 
@@ -369,6 +477,98 @@ export const trackerModule = {
         const store = createTrackerStore(host.context);
         const pending = new Map();
         const running = new Set();
+
+        // Publishes every block's description + current state to the shared data bus
+        // (namespace "tracker": a `blocks` index plus one `block:<id>` entry each).
+        // This is the ONLY place tracked fields leave the module — never into
+        // `message.mes` or anything sent to the character LLM, only onto `host.data`,
+        // which other modules or this module's own floating panel can read or subscribe to.
+        const publish = () => {
+            const settings = host.moduleSettings(MODULE_DEFAULTS);
+            host.data.set('blocks', settings.blocks.map(describeBlockForBus));
+            for (const block of settings.blocks) {
+                host.data.set(`block:${block.id}`, { ...describeBlockForBus(block), state: store.get(block.id), updatedAt: Date.now() });
+            }
+        };
+        host.data.set('publish', publish);
+        publish();
+
+        // --- Floating panel: a separate, draggable, opt-in surface for the tracked
+        // fields. It reads only from the bus above, so it structurally cannot leak
+        // into the chat transcript or the main LLM's context.
+        const initialSettings = host.moduleSettings(MODULE_DEFAULTS);
+        const hud = createHudPanel();
+        applyHudPosition(hud, initialSettings);
+        hud.classList.toggle('stme-tracker-hud-collapsed', Boolean(initialSettings.hud.collapsed));
+        hud.hidden = !initialSettings.hud.enabled;
+        host.data.set('hudPanel', hud);
+
+        const renderHud = () => {
+            const blocksIndex = host.data.get('blocks', []).filter(block => block.enabled);
+            const body = hud.querySelector('.stme-tracker-hud-body');
+            body.replaceChildren();
+            if (!blocksIndex.length) {
+                const empty = document.createElement('p');
+                empty.className = 'stme-tracker-hud-empty';
+                empty.textContent = 'No tracker fields to show yet.';
+                body.append(empty);
+                return;
+            }
+            for (const block of blocksIndex) {
+                const entry = host.data.get(`block:${block.id}`, null);
+                const state = entry?.state ?? {};
+                const section = document.createElement('div');
+                section.className = 'stme-tracker-hud-block';
+                const title = document.createElement('strong');
+                title.textContent = block.title;
+                section.append(title);
+                const list = document.createElement('div');
+                list.className = 'stme-tracker-hud-fields';
+                if (!block.fields.length) {
+                    const none = document.createElement('span');
+                    none.className = 'stme-tracker-hud-empty';
+                    none.textContent = 'No fields configured.';
+                    list.append(none);
+                }
+                for (const field of block.fields) {
+                    const row = document.createElement('div');
+                    row.className = 'stme-tracker-hud-field';
+                    row.innerHTML = '<span class="stme-tracker-hud-field-name"></span><span class="stme-tracker-hud-field-value"></span>';
+                    row.querySelector('.stme-tracker-hud-field-name').textContent = field;
+                    row.querySelector('.stme-tracker-hud-field-value').textContent = state[field] || '—';
+                    list.append(row);
+                }
+                section.append(list);
+                body.append(section);
+            }
+        };
+
+        let blockSubs = new Map();
+        const resubscribeBlocks = () => {
+            for (const unsub of blockSubs.values()) unsub();
+            blockSubs = new Map();
+            for (const block of host.data.get('blocks', [])) {
+                blockSubs.set(block.id, host.data.subscribe(MODULE_ID, `block:${block.id}`, renderHud));
+            }
+            renderHud();
+        };
+        const unsubBlocksIndex = host.data.subscribe(MODULE_ID, 'blocks', resubscribeBlocks);
+        resubscribeBlocks();
+
+        hud.querySelector('.stme-tracker-hud-collapse').addEventListener('click', () => {
+            const settings = host.moduleSettings(MODULE_DEFAULTS);
+            const collapsed = !hud.classList.contains('stme-tracker-hud-collapsed');
+            hud.classList.toggle('stme-tracker-hud-collapsed', collapsed);
+            settings.hud = { ...settings.hud, collapsed };
+            host.saveModuleSettings();
+        });
+        hud.querySelector('.stme-tracker-hud-close').addEventListener('click', () => {
+            const settings = host.moduleSettings(MODULE_DEFAULTS);
+            settings.hud = { ...settings.hud, enabled: false };
+            host.saveModuleSettings();
+            hud.hidden = true;
+        });
+        const unmakeDraggable = makeHudDraggable(hud, host);
 
         const start = host.onEvent('GENERATION_STARTED', () => {
             if (!host.sidecar.isConfigured()) return;
@@ -428,6 +628,7 @@ export const trackerModule = {
 
             if (changed) {
                 updateMessage(context, resolved.index, resolved.message);
+                publish();
                 setTimeout(() => renderBadges(resolved.message.mesid ?? resolved.index, resolved.message.extra[TRACKER_EXTRA_KEY]));
             }
         });
@@ -438,9 +639,19 @@ export const trackerModule = {
                 if (message.extra?.[TRACKER_EXTRA_KEY]) renderBadges(message.mesid ?? index, message.extra[TRACKER_EXTRA_KEY]);
             });
         };
-        const changed = host.onChatChanged(refreshBadges);
+        const chatChangedUnsub = host.onChatChanged(() => { refreshBadges(); publish(); });
 
-        return () => { start(); received(); changed(); };
+        return () => {
+            start(); received(); chatChangedUnsub();
+            unsubBlocksIndex();
+            for (const unsub of blockSubs.values()) unsub();
+            unmakeDraggable();
+            hud.remove();
+            host.data.remove('hudPanel');
+            host.data.remove('publish');
+            host.data.remove('blocks');
+            for (const block of host.moduleSettings(MODULE_DEFAULTS).blocks) host.data.remove(`block:${block.id}`);
+        };
     },
 
     render(container, host) {
@@ -450,9 +661,19 @@ export const trackerModule = {
 
         container.innerHTML = `
             <p class="stme-tracker-help">Each tracker below is independent: its own SideCar profile, its own prompt, its own fields. Drag a tracker by its grip to reorder it.</p>
+            <label class="stme-check stme-tracker-hud-toggle"><input type="checkbox" data-action="hud-enabled"> Show floating panel <small>A separate, movable tab with live field values — never sent to the main LLM.</small></label>
             <div class="stme-tracker-blocks"></div>
             <button class="menu_button stme-tracker-add" type="button"><i class="fa-solid fa-plus"></i> Add tracker</button>
         `;
+
+        const hudToggle = container.querySelector('[data-action="hud-enabled"]');
+        hudToggle.checked = Boolean(settings.hud.enabled);
+        hudToggle.addEventListener('change', () => {
+            settings.hud = { ...settings.hud, enabled: hudToggle.checked };
+            host.saveModuleSettings();
+            const panel = host.data.get('hudPanel');
+            if (panel) panel.hidden = !hudToggle.checked;
+        });
 
         const list = container.querySelector('.stme-tracker-blocks');
         if (!settings.blocks.length) {
@@ -476,12 +697,14 @@ export const trackerModule = {
             order.splice(at < 0 ? order.length : at, 0, moving);
             settings.blocks = order;
             host.saveModuleSettings();
+            host.data.get('publish')?.();
             host.refresh();
         };
 
         container.querySelector('.stme-tracker-add').addEventListener('click', () => {
             settings.blocks = [...settings.blocks, createBlock()];
             host.saveModuleSettings();
+            host.data.get('publish')?.();
             host.refresh();
         });
     },
@@ -517,6 +740,26 @@ export const trackerModule = {
         .stme-settings .stme-tracker-current { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; background: rgba(0, 0, 0, .06); }
         .stme-settings .stme-tracker-current-value { opacity: .85; overflow-wrap: anywhere; }
         .stme-settings .stme-tracker-actions { display: flex; gap: 8px; }
+        .stme-settings .stme-tracker-hud-toggle { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: rgba(0, 0, 0, .05); }
+        .stme-settings .stme-tracker-hud-toggle small { opacity: .65; flex-basis: 100%; }
+
+        /* Floating panel: appended to document.body, not the chat transcript — reads only from the data bus. */
+        .stme-tracker-hud { position: fixed; z-index: 5000; width: 260px; max-height: 70vh; display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 70%, var(--SmartThemeBorderColor)); background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, var(--SmartThemeQuoteColor, #8da8ff)); box-shadow: 0 12px 32px rgba(0, 0, 0, .35); backdrop-filter: blur(6px); font-family: var(--mainFontFamily, inherit); color: var(--SmartThemeBodyColor); }
+        .stme-tracker-hud[hidden] { display: none; }
+        .stme-tracker-hud-head { display: flex; align-items: center; gap: 6px; padding: 7px 8px; cursor: grab; background: linear-gradient(105deg, transparent, rgba(0, 0, 0, .14)); user-select: none; touch-action: none; }
+        .stme-tracker-hud-head:active { cursor: grabbing; }
+        .stme-tracker-hud-grip { opacity: .6; }
+        .stme-tracker-hud-head strong { flex: 1; font-size: .8em; letter-spacing: .04em; text-transform: uppercase; opacity: .85; }
+        .stme-tracker-hud-collapse, .stme-tracker-hud-close { border: none; background: transparent; color: inherit; opacity: .7; cursor: pointer; width: 20px; height: 20px; line-height: 1; border-radius: 5px; font-size: 1em; }
+        .stme-tracker-hud-collapse:hover, .stme-tracker-hud-close:hover { opacity: 1; background: rgba(255, 255, 255, .14); }
+        .stme-tracker-hud-body { padding: 9px 11px 11px; overflow-y: auto; display: flex; flex-direction: column; gap: 11px; }
+        .stme-tracker-hud.stme-tracker-hud-collapsed .stme-tracker-hud-body { display: none; }
+        .stme-tracker-hud-empty { margin: 0; opacity: .65; font-size: .85em; }
+        .stme-tracker-hud-block strong { display: block; font-size: .8em; opacity: .75; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
+        .stme-tracker-hud-fields { display: flex; flex-direction: column; gap: 3px; }
+        .stme-tracker-hud-field { display: flex; justify-content: space-between; gap: 8px; font-size: .88em; }
+        .stme-tracker-hud-field-name { opacity: .7; }
+        .stme-tracker-hud-field-value { font-weight: 600; text-align: right; overflow-wrap: anywhere; }
 
         #chat .stme-tracker, .mes .stme-tracker {
             display: block !important;
