@@ -1,4 +1,4 @@
-import { effect, isSignal } from './reactive.js';
+import { effect, isSignal, untrack } from './reactive.js';
 
 const disposers = new WeakMap();
 
@@ -115,7 +115,10 @@ export function list(itemsSignal, keyFn, renderItem) {
             const key = keyFn(item);
             seen.add(key);
             let node = nodes.get(key);
-            if (!node) { node = renderItem(item); nodes.set(key, node); }
+            // untrack: renderItem may do its own, unrelated signal reads (e.g. a module's
+            // render() reading its own local state) — those must not become dependencies
+            // of THIS list()'s own tracking effect. See reactive.js's untrack() doc comment.
+            if (!node) { node = untrack(() => renderItem(item)); nodes.set(key, node); }
             const desiredNext = cursor ? cursor.nextSibling : wrapper.firstChild;
             if (desiredNext !== node) { if (cursor) cursor.after(node); else wrapper.prepend(node); }
             cursor = node;
@@ -143,7 +146,14 @@ export function show(valueSignal, renderFn) {
     wrapper.style.display = 'contents';
     let current = null;
     own(wrapper, effect(() => {
-        const node = renderFn(valueSignal());
+        const value = valueSignal();
+        // untrack: renderFn (e.g. module-engine.js calling module.render()) may do its own,
+        // unrelated bare signal reads — those must not leak into THIS show()'s own tracking
+        // effect. Without this, a module reading one of its own local signals inside render()
+        // makes show()'s effect re-run on every change to that signal, which calls renderFn
+        // again, which re-subscribes the same read again — see reactive.js's untrack() doc
+        // comment and the matching fix in data-bus.js for the two-part bug this closes.
+        const node = untrack(() => renderFn(value));
         if (current) { current.remove(); disposeTree(current); }
         current = node instanceof Node ? node : null;
         if (current) wrapper.append(current);
@@ -172,4 +182,4 @@ export function onDispose(node, cleanup) {
     return own(node, cleanup);
 }
 
-export { effect, signal, computed, isSignal, unwrap } from './reactive.js';
+export { effect, signal, computed, isSignal, unwrap, untrack } from './reactive.js';
