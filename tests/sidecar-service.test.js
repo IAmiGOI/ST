@@ -60,3 +60,19 @@ test('SideCar sends configured reasoning controls only to OpenRouter endpoints',
         assert.deepEqual(body.reasoning, { enabled: true, effort: 'high', max_tokens: 512, exclude: true });
     } finally { globalThis.fetch = originalFetch; }
 });
+
+test('SideCar coerces saved profile form values to numeric request parameters', async () => {
+    const { service } = createService();
+    service.update({ enabled: true, endpoint: 'https://example.test/v1', model: 'small' });
+    const profile = service.profile('default');
+    Object.assign(profile, { temperature: '0.4', topP: '0.8', maxTokens: '256' });
+    const originalFetch = globalThis.fetch;
+    let body;
+    globalThis.fetch = async (_url, options) => { body = JSON.parse(options.body); return { ok: true, json: async () => ({ choices: [{ message: { content: 'OK' } }] }) }; };
+    try {
+        await service.request({ prompt: 'test' });
+        assert.equal(body.temperature, 0.4);
+        assert.equal(body.top_p, 0.8);
+        assert.equal(body.max_tokens, 256);
+    } finally { globalThis.fetch = originalFetch; }
+});

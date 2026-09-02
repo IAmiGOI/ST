@@ -82,7 +82,25 @@ export class SidecarService {
 
     #profileValues(settings) { return { temperature: settings.temperature, topP: settings.topP, topK: settings.topK, minP: settings.minP, typicalP: settings.typicalP, repetitionPenalty: settings.repetitionPenalty, frequencyPenalty: settings.frequencyPenalty, presencePenalty: settings.presencePenalty, maxTokens: settings.maxTokens, seed: settings.seed, reasoningMode: settings.reasoningMode, reasoningEffort: settings.reasoningEffort, reasoningMaxTokens: settings.reasoningMaxTokens, reasoningExclude: settings.reasoningExclude }; }
 
-    profile(id = 'default') { const profiles = this.profiles(); return profiles.find(profile => profile.id === id) ?? profiles.find(profile => profile.id === 'default'); }
+    profile(id = 'default') {
+        const profile = this.profiles().find(item => item.id === id) ?? this.profiles().find(item => item.id === 'default');
+        const fallback = this.#profileValues(this.settings());
+        profile.temperature = clamp(profile.temperature, 0, 2, fallback.temperature);
+        profile.topP = clamp(profile.topP, 0, 1, fallback.topP);
+        profile.topK = Math.round(clamp(profile.topK, 0, 200, fallback.topK));
+        profile.minP = clamp(profile.minP, 0, 1, fallback.minP);
+        profile.typicalP = clamp(profile.typicalP, 0, 1, fallback.typicalP);
+        profile.repetitionPenalty = clamp(profile.repetitionPenalty, 0, 2, fallback.repetitionPenalty);
+        profile.frequencyPenalty = clamp(profile.frequencyPenalty, -2, 2, fallback.frequencyPenalty);
+        profile.presencePenalty = clamp(profile.presencePenalty, -2, 2, fallback.presencePenalty);
+        profile.maxTokens = Math.round(clamp(profile.maxTokens, 1, 32768, fallback.maxTokens));
+        profile.seed = Math.round(clamp(profile.seed, 0, 999999, fallback.seed));
+        profile.reasoningMode = ['inherit', 'enabled', 'disabled'].includes(profile.reasoningMode) ? profile.reasoningMode : fallback.reasoningMode;
+        profile.reasoningEffort = ['low', 'medium', 'high'].includes(profile.reasoningEffort) ? profile.reasoningEffort : fallback.reasoningEffort;
+        profile.reasoningMaxTokens = Math.round(clamp(profile.reasoningMaxTokens, 0, 32768, fallback.reasoningMaxTokens));
+        profile.reasoningExclude = Boolean(profile.reasoningExclude);
+        return profile;
+    }
 
     createProfile(name) { const id = `profile_${Date.now().toString(36)}`; const source = this.profile(this.#editingProfile); this.settings().profiles[id] = { ...source, id, name: String(name || 'New profile').trim().slice(0, 80) || 'New profile' }; this.#editingProfile = id; this.#save(); return id; }
 
