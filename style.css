@@ -54,3 +54,6 @@
 .stme-settings .stme-reasoning-grid > label:not(.stme-slider):not(.stme-check) { display: flex; flex-direction: column; gap: 4px; font-size: .9em; }
 .stme-settings .menu_button { transition: transform .15s ease, filter .15s ease; }
 .stme-settings .menu_button:hover { transform: translateY(-1px); filter: brightness(1.08); }
+.stme-settings .stme-rp-time { display: flex; align-items: center; gap: 7px; width: fit-content; margin: 14px 0 2px auto; padding: 6px 10px; border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 75%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 70%, var(--SmartThemeQuoteColor, #8da8ff)); box-shadow: 0 3px 10px rgba(0,0,0,.18); font-size: .84em; }
+.stme-settings .stme-rp-time-icon { color: var(--SmartThemeQuoteColor, #8da8ff); font-size: 1.2em; }.stme-settings .stme-rp-time-label { opacity: .68; text-transform: uppercase; letter-spacing: .06em; font-size: .8em; }.stme-settings .stme-rp-time-value { font-weight: 700; }
+.stme-settings .stme-profile-row { display:flex; gap:8px; align-items:end; padding:8px; border-radius:8px; background:rgba(0,0,0,.09); }.stme-settings .stme-profile-row label { flex:1; display:flex; flex-direction:column; gap:3px; font-size:.85em; }

@@ -32,6 +32,7 @@ export class SidecarService {
     #save;
     #leases = new Map();
     #sequence = 0;
+    #editingProfile = 'default';
 
     constructor(settingsRoot, save) {
         this.#settingsRoot = settingsRoot;
@@ -71,6 +72,20 @@ export class SidecarService {
         return { ...settings };
     }
 
+
+    profiles() {
+        const settings = this.settings();
+        settings.profiles ??= { default: { id: 'default', name: 'Default', ...this.#profileValues(settings) } };
+        if (!settings.profiles.default) settings.profiles.default = { id: 'default', name: 'Default', ...this.#profileValues(settings) };
+        return Object.values(settings.profiles);
+    }
+
+    #profileValues(settings) { return { temperature: settings.temperature, topP: settings.topP, topK: settings.topK, minP: settings.minP, typicalP: settings.typicalP, repetitionPenalty: settings.repetitionPenalty, frequencyPenalty: settings.frequencyPenalty, presencePenalty: settings.presencePenalty, maxTokens: settings.maxTokens, seed: settings.seed, reasoningMode: settings.reasoningMode, reasoningEffort: settings.reasoningEffort, reasoningMaxTokens: settings.reasoningMaxTokens, reasoningExclude: settings.reasoningExclude }; }
+
+    profile(id = 'default') { const profiles = this.profiles(); return profiles.find(profile => profile.id === id) ?? profiles.find(profile => profile.id === 'default'); }
+
+    createProfile(name) { const id = `profile_${Date.now().toString(36)}`; const source = this.profile(this.#editingProfile); this.settings().profiles[id] = { ...source, id, name: String(name || 'New profile').trim().slice(0, 80) || 'New profile' }; this.#editingProfile = id; this.#save(); return id; }
+
     isConfigured() {
         const settings = this.settings();
         return settings.enabled && Boolean(settings.endpoint);
@@ -80,6 +95,7 @@ export class SidecarService {
         return Object.freeze({
             /** One-shot request. No persistent allocation is retained. */
             request: (options) => this.request({ ...options, moduleId }),
+            profiles: () => this.profiles().map(({ id, name }) => ({ id, name })),
             /**
              * Reserve a client for the module lifecycle. A lease does not keep an
              * HTTP connection open; it gives repeated requests one central config
@@ -110,18 +126,19 @@ export class SidecarService {
         return { ...safe, activeLeases: this.#leases.size };
     }
 
-    async request({ prompt, systemPrompt = '', temperature, maxTokens, timeoutMs, signal, moduleId = 'unknown' } = {}) {
+    async request({ prompt, systemPrompt = '', temperature, maxTokens, timeoutMs, signal, profileId = 'default', moduleId = 'unknown' } = {}) {
         if (!this.isConfigured()) throw new Error('SideCar is not configured. Enable it and provide an endpoint in ST Module Engine settings.');
         if (!String(prompt ?? '').trim()) throw new Error('SideCar request requires a prompt.');
         const settings = this.settings();
+        const profile = this.profile(profileId);
         const request = {
             prompt: String(prompt), systemPrompt: String(systemPrompt ?? ''),
-            temperature: clamp(temperature, 0, 2, settings.temperature),
-            maxTokens: Math.round(clamp(maxTokens, 1, 32768, settings.maxTokens)),
+            temperature: clamp(temperature, 0, 2, profile.temperature),
+            maxTokens: Math.round(clamp(maxTokens, 1, 32768, profile.maxTokens)),
             timeoutMs: Math.round(clamp(timeoutMs, 1000, 300000, settings.timeoutMs)),
             signal,
-            sampler: { topP: settings.topP, topK: settings.topK, minP: settings.minP, typicalP: settings.typicalP, repetitionPenalty: settings.repetitionPenalty, frequencyPenalty: settings.frequencyPenalty, presencePenalty: settings.presencePenalty, seed: settings.seed },
-            reasoning: { mode: settings.reasoningMode, effort: settings.reasoningEffort, maxTokens: settings.reasoningMaxTokens, exclude: settings.reasoningExclude },
+            sampler: { topP: profile.topP, topK: profile.topK, minP: profile.minP, typicalP: profile.typicalP, repetitionPenalty: profile.repetitionPenalty, frequencyPenalty: profile.frequencyPenalty, presencePenalty: profile.presencePenalty, seed: profile.seed },
+            reasoning: { mode: profile.reasoningMode, effort: profile.reasoningEffort, maxTokens: profile.reasoningMaxTokens, exclude: profile.reasoningExclude },
         };
         console.debug(`[ST Module Engine] SideCar request from ${moduleId}.`);
         if (settings.format === 'anthropic') return this.#anthropic(settings, request);
@@ -180,18 +197,22 @@ export class SidecarService {
 
     render(container, toast, includeHeader = true) {
         const settings = this.settings();
+        const profile = this.profile(this.#editingProfile);
         const sliders = [
             ['temperature', 'Temperature', 0, 2, 0.05], ['topP', 'Top P', 0, 1, 0.01], ['topK', 'Top K', 0, 200, 1], ['minP', 'Min P', 0, 1, 0.01], ['typicalP', 'Typical P', 0, 1, 0.01], ['repetitionPenalty', 'Repetition penalty', 0, 2, 0.01], ['frequencyPenalty', 'Frequency penalty', -2, 2, 0.01], ['presencePenalty', 'Presence penalty', -2, 2, 0.01], ['maxTokens', 'Max tokens', 1, 32768, 1], ['seed', 'Seed (0 = random)', 0, 999999, 1],
         ];
         const sliderHtml = sliders.map(([key, label, min, max, step]) => `<label class="stme-slider"><span>${label} <output data-output="${key}"></output></span><input data-field="${key}" type="range" min="${min}" max="${max}" step="${step}"></label>`).join('');
         container.className = 'stme-sidecar';
         const header = includeHeader ? '<header><div><strong>SideCar</strong><small>One shared model profile for all modules.</small></div></header>' : '';
-        container.innerHTML = `${header}<div class="stme-sidecar-fields"><label class="stme-check"><input data-field="enabled" type="checkbox"> Enable SideCar</label><label>Format <select class="text_pole" data-field="format"><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic Messages</option><option value="google">Google Gemini</option></select></label><label>Endpoint <input class="text_pole" data-field="endpoint" type="url" placeholder="https://api.example.com/v1"></label><label>API key <input class="text_pole" data-field="apiKey" type="password" autocomplete="off" placeholder="Optional for local endpoints"></label><label>Model <input class="text_pole" data-field="model" type="text" placeholder="Model name"></label><details class="stme-sampler"><summary>Sampler settings <small>Unsupported fields may be ignored by your provider.</small></summary><div class="stme-sampler-grid">${sliderHtml}</div></details><details class="stme-reasoning"><summary>Reasoning <small>OpenRouter only</small></summary><div class="stme-reasoning-grid"><label>Mode <select class="text_pole" data-field="reasoningMode"><option value="inherit">Provider default</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label><label>Effort <select class="text_pole" data-field="reasoningEffort"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label class="stme-slider"><span>Reasoning tokens <output data-output="reasoningMaxTokens"></output></span><input data-field="reasoningMaxTokens" type="range" min="0" max="32768" step="1"></label><label class="stme-check"><input data-field="reasoningExclude" type="checkbox"> Hide reasoning from the reply</label></div></details><div><button class="menu_button" data-action="save" type="button">Save SideCar</button> <button class="menu_button" data-action="test" type="button">Test connection</button></div></div>`;
-        for (const [key, value] of Object.entries(settings)) { const input = container.querySelector(`[data-field="${key}"]`); if (!input) continue; if (input.type === 'checkbox') input.checked = value; else input.value = value; const output = container.querySelector(`[data-output="${key}"]`); if (output) output.value = value; }
+        container.innerHTML = `${header}<div class="stme-sidecar-fields"><div class="stme-profile-row"><label>Sampler profile <select class="text_pole" data-field="profileId"></select></label><button class="menu_button" data-action="new-profile" type="button">New profile</button></div><label class="stme-check"><input data-field="enabled" type="checkbox"> Enable SideCar</label><label>Format <select class="text_pole" data-field="format"><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic Messages</option><option value="google">Google Gemini</option></select></label><label>Endpoint <input class="text_pole" data-field="endpoint" type="url" placeholder="https://api.example.com/v1"></label><label>API key <input class="text_pole" data-field="apiKey" type="password" autocomplete="off" placeholder="Optional for local endpoints"></label><label>Model <input class="text_pole" data-field="model" type="text" placeholder="Model name"></label><details class="stme-sampler"><summary>Sampler settings <small>Unsupported fields may be ignored by your provider.</small></summary><div class="stme-sampler-grid">${sliderHtml}</div></details><details class="stme-reasoning"><summary>Reasoning <small>OpenRouter only</small></summary><div class="stme-reasoning-grid"><label>Mode <select class="text_pole" data-field="reasoningMode"><option value="inherit">Provider default</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label><label>Effort <select class="text_pole" data-field="reasoningEffort"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label class="stme-slider"><span>Reasoning tokens <output data-output="reasoningMaxTokens"></output></span><input data-field="reasoningMaxTokens" type="range" min="0" max="32768" step="1"></label><label class="stme-check"><input data-field="reasoningExclude" type="checkbox"> Hide reasoning from the reply</label></div></details><div><button class="menu_button" data-action="save" type="button">Save SideCar</button> <button class="menu_button" data-action="test" type="button">Test connection</button></div></div>`;
+        for (const [key, value] of Object.entries({ ...settings, ...profile })) { const input = container.querySelector(`[data-field="${key}"]`); if (!input) continue; if (input.type === 'checkbox') input.checked = value; else input.value = value; const output = container.querySelector(`[data-output="${key}"]`); if (output) output.value = value; }
         for (const input of container.querySelectorAll('input[type="range"]')) input.addEventListener('input', () => { container.querySelector(`[data-output="${input.dataset.field}"]`).value = input.value; });
         const fields = ['enabled', 'format', 'endpoint', 'apiKey', 'model', ...sliders.map(([key]) => key), 'reasoningMode', 'reasoningEffort', 'reasoningMaxTokens', 'reasoningExclude'];
+        const profileSelect = container.querySelector('[data-field="profileId"]'); for (const item of this.profiles()) { const option = new Option(item.name, item.id); option.selected = item.id === this.#editingProfile; profileSelect.add(option); }
+        profileSelect.addEventListener('change', () => { this.#editingProfile = profileSelect.value; this.render(container, toast, includeHeader); });
+        container.querySelector('[data-action="new-profile"]').addEventListener('click', () => { this.createProfile(window.prompt('Profile name', 'New profile')); this.render(container, toast, includeHeader); });
         const read = () => Object.fromEntries(fields.map(key => { const input = container.querySelector(`[data-field="${key}"]`); return [key, input.type === 'checkbox' ? input.checked : input.value]; }));
-        container.querySelector('[data-action="save"]').addEventListener('click', () => { this.update(read()); toast('success', 'SideCar settings saved.', 'SideCar'); });
+        container.querySelector('[data-action="save"]').addEventListener('click', () => { const values = read(); this.update(values); Object.assign(this.profile(this.#editingProfile), Object.fromEntries([...sliders.map(([key]) => key), 'reasoningMode', 'reasoningEffort', 'reasoningMaxTokens', 'reasoningExclude'].map(key => [key, values[key]]))); this.settings().profiles[this.#editingProfile] = this.profile(this.#editingProfile); this.#save(); toast('success', 'SideCar profile saved.', 'SideCar'); });
         container.querySelector('[data-action="test"]').addEventListener('click', async event => { event.currentTarget.disabled = true; try { this.update(read()); const result = await this.test(); toast('success', `Connected in ${result.latencyMs} ms: ${result.text || '(empty response)'}`, 'SideCar'); } catch (error) { toast('error', error?.message || String(error), 'SideCar'); } finally { event.currentTarget.disabled = false; } });
     }
 }
