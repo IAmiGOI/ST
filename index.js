@@ -5,6 +5,7 @@ import { notebookModule } from './modules/notebook/index.js';
 import { timeModule } from './modules/time/index.js';
 import { trackerModule } from './modules/tracker/index.js';
 import { musicModule } from './modules/music/index.js';
+import { lorebookModule } from './modules/lorebook/index.js';
 
 // The drawer lives in JavaScript so the extension works regardless of its
 // installation folder name and never depends on a fetched template file.
@@ -34,6 +35,7 @@ async function init() {
     engine.register(timeModule);
     engine.register(trackerModule);
     engine.register(musicModule);
+    engine.register(lorebookModule);
     await engine.start();
 
     const target = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
@@ -45,7 +47,7 @@ async function init() {
     addTopBarLauncher(fullScreenPanel);
 
     window.STModuleEngine = engine;
-    console.info('[ST Module Engine] Started with Notebook, RP Time, Tracker and Music modules.');
+    console.info('[ST Module Engine] Started with Notebook, RP Time, Tracker, Music and Lorebook Scan modules.');
 }
 
 /**

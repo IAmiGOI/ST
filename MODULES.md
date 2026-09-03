@@ -1,64 +1,91 @@
-# Руководство по модулям ST Module Engine
+# ST Module Engine — Module Guide
 
-Этот документ описывает, как устроены модули, как их добавлять и как использовать общие сервисы движка. Модуль — это JavaScript-объект внутри одного расширения SillyTavern. Он не является отдельным ST extension: движок управляет его lifecycle, UI, подписками, SideCar-профилем и обменом данными.
+This document explains how modules are built, how to add one, and how to use the
+engine's shared services. A module is a plain JavaScript object living inside one
+SillyTavern extension. It is not a standalone ST extension itself: the engine owns its
+lifecycle, its UI, its event subscriptions, its SideCar profile, and its data exchange
+with everything else.
 
-## Чем это лучше обычного ST-расширения
+## Why this beats a plain ST extension
 
-Движок берёт на себя весь повторяющийся bootstrap: вставку в `#extensions_settings`, слияние дефолтов настроек, enable/disable с изоляцией ошибок и кнопкой **Retry module**, авто-отписку от `eventSource` с перехватом ошибок в колбэках, drag-reorder карточек и, главное, один общий SideCar — модулю не нужно писать свой fetch/auth/config UI для похода к LLM. Это реально убирает boilerplate, который в обычном самостоятельном extension почти никто не делает аккуратно (упавший `init()` там обычно ломает весь скрипт без возможности retry).
+The engine absorbs all the repetitive bootstrap: inserting into `#extensions_settings`,
+merging setting defaults, enable/disable with per-module error isolation and a **Retry
+module** button, auto-unsubscribing from `eventSource` with errors in callbacks caught
+instead of propagating, drag-reorder for cards, and — the big one — a single shared
+SideCar, so a module never writes its own fetch/auth/config UI just to reach an LLM.
+This removes boilerplate that a plain, hand-rolled extension almost never gets right (a
+throwing `init()` there usually takes the whole script down with no retry path at all).
 
-С этой ревизии движок **также включает небольшой UI-фреймворк** (`core/reactive.js` + `core/dom.js` + `core/widgets.js`) — сигналы, `h()`-билдер элементов и готовые компоненты (`Field`, `TextInput`, `Toggle`, `Select`, `SliderField`, `Chip`, `DraggableList`, ...). `render()` теперь вызывается **один раз** за включение модуля (см. ниже), а не при каждом refresh — точечно обновляется только то, что реально изменилось, DOM других модулей и несохранённый ввод пользователя больше не уничтожаются по любому чужому поводу. Писать модуль через `innerHTML` + `querySelector` по-прежнему можно (`container` — обычный DOM-элемент), но так вы теряете и реактивность, и весь смысл единоразового `render()` — свежие модули должны использовать `core/widgets.js`.
+As of this revision the engine **also ships a small UI framework**
+(`core/reactive.js` + `core/dom.js` + `core/widgets.js`) — signals, an `h()` element
+builder, and ready-made components (`Field`, `TextInput`, `Toggle`, `Select`,
+`SliderField`, `Chip`, `DraggableList`, …). `render()` is now called **once** per enable
+(see below), not on every refresh — only what actually changed patches the DOM; other
+modules' DOM and a user's unsaved input are no longer wiped out by an unrelated event
+elsewhere. Building a module through `innerHTML` + `querySelector` still works
+(`container` is a plain DOM element), but doing that throws away both reactivity and the
+entire point of a once-only `render()` — new modules should use `core/widgets.js`.
 
-## Быстрая модель работы
+## Quick mental model
 
-1. `index.js` создаёт `ModuleEngine`.
-2. Встроенные или новые модули регистрируются через `engine.register(module)` до `engine.start()`.
-3. При запуске движок включает модули, разрешённые в настройках.
-4. У каждого модуля есть своя collapsible карточка в разделе **Modules**. Её можно включить, выключить и перетащить.
-5. Общие настройки находятся в **Base settings**; сейчас там находится SideCar.
+1. `index.js` creates a `ModuleEngine`.
+2. Built-in or new modules register via `engine.register(module)` before `engine.start()`.
+3. On startup the engine enables whichever modules are allowed in settings.
+4. Each module gets a collapsible card under **Modules**. It can be enabled, disabled,
+   and dragged to reorder.
+5. Shared settings live under **Base settings** — currently just SideCar.
+6. The whole thing has **two entry points into the same UI tree**: the drawer inside
+   `#extensions_settings2` (always there), and a full-screen overlay toggled from a
+   native-styled icon `index.js` inserts into SillyTavern's own top bar (see
+   [Full-screen panel and the top-bar launcher](#full-screen-panel-and-the-top-bar-launcher)).
+   Both call `engine.mount()` on their own root — a module never needs to know which one
+   its card is currently rendered inside.
 
-## Контракт модуля
+## Module contract
 
-Минимальный модуль должен содержать следующие поля:
+A minimal module needs these fields:
 
 ```js
 export const exampleModule = {
-  id: 'example',                 // уникальный: a-z, 0-9 и дефис
+  id: 'example',                 // unique: a-z, 0-9, and hyphens
   title: 'Example module',
-  description: 'Краткое описание для UI.',
-  defaultEnabled: false,         // true, если модуль должен запускаться сразу
+  description: 'Short description for the UI.',
+  defaultEnabled: false,         // true if the module should start enabled
 
   async activate(host) {
-    // Подписки, tool registration, фоновые клиенты.
-    // Верните cleanup-функцию.
+    // Subscriptions, tool registration, background clients.
+    // Return a cleanup function.
     return () => {};
   },
 
   render(container, host) {
-    // Создайте UI только внутри container.
+    // Build UI only inside container.
   },
 };
 ```
 
-Регистрация выполняется в `index.js`:
+Registration happens in `index.js`:
 
 ```js
 engine.register(exampleModule);
 ```
 
-`id` является namespace для настроек и data bus. Не меняйте его после публикации: пользователи могут уже иметь сохранённые настройки.
+`id` is the namespace for settings and the data bus. Don't change it after shipping —
+users may already have settings saved under it.
 
 ## Lifecycle
 
 ### `activate(host)`
 
-Вызывается после включения модуля. Используйте его для регистрации ST function tools, prompt injection, SideCar lease и подписок на события.
+Called after the module is enabled. Use it to register ST function tools, inject
+prompts, acquire a SideCar lease, and subscribe to events.
 
-Возвращаемая cleanup-функция вызывается при отключении модуля. В ней обязательно:
+The returned cleanup function runs when the module is disabled. In it you must:
 
-- снимите подписки;
-- вызовите `lease.release()` для SideCar lease;
-- удалите зарегистрированные tools;
-- очистите injected prompts, если это требуется.
+- drop your subscriptions;
+- call `lease.release()` for any SideCar lease;
+- unregister any tools you registered;
+- clear injected prompts, if that's needed.
 
 ```js
 activate(host) {
@@ -74,15 +101,28 @@ activate(host) {
 
 ### `render(container, host)`
 
-Вызывается **один раз** — когда модуль включается (и заново, если включить его после отключения, или после `host.refresh()`/Retry). Движок **не** перевызывает `render()` из-за того, что изменился порядок карточек, свернулась/развернулась чужая карточка, или включился/выключился другой модуль — DOM вашей карточки, однажды построенный, живёт нетронутым, пока модуль включён.
+Called **once** — when the module is enabled (and again if it's re-enabled after being
+disabled, or after `host.refresh()`/Retry). The engine does **not** re-invoke `render()`
+just because card order changed, some other card was collapsed/expanded, or another
+module was enabled/disabled — once your card's DOM is built, it stays untouched for as
+long as the module stays enabled.
 
-Из этого следует главное практическое правило: **весь динамический контент внутри `container` стройте через сигналы (`core/widgets.js`), а не через повторный вызов `render()`.** Прочитайте настройки/metadata один раз в сигналы при построении UI, а дальнейшие изменения проводите через `signal.set(...)` — DOM отреагирует сам, точечно. Если что-то меняется не изнутри этого же `render()` (например, tool action в `activate()`, или сообщение шины от другого модуля), самому `render()` нет способа об этом узнать без явной подписки — используйте `host.data` bus (см. ниже) или `host.onChatChanged()`, вызванные прямо внутри `render()`, и отвяжите их через `onDispose(container, unsubscribe)`, иначе подписка переживёт саму карточку.
+The practical rule that follows: **build every piece of dynamic content inside
+`container` with signals (`core/widgets.js`), not by re-running `render()`.** Read
+settings/metadata into signals once, while building the UI, then push further changes
+through `signal.set(...)` — the DOM reacts on its own, precisely. If something changes
+from outside this same `render()` call (a tool action fired from `activate()`, a bus
+message from another module), `render()` has no way to find out about it without an
+explicit subscription — use the `host.data` bus (below) or `host.onChatChanged()`,
+called from inside `render()` itself, and tie the unsubscribe to the container's
+lifetime with `onDispose(container, unsubscribe)` — otherwise the subscription outlives
+the card itself.
 
 ```js
 render(container, host) {
   const settings = host.moduleSettings({ limit: 10 });
-  const limit = signal(settings.limit);           // сигнал — источник правды для DOM
-  const items = signal(loadItems(host));           // список, обновляемый вручную при изменениях
+  const limit = signal(settings.limit);            // signal — the source of truth for the DOM
+  const items = signal(loadItems(host));            // list refreshed by hand on external changes
 
   onDispose(container, host.data.subscribe(host.id, 'changed', () => items.set(loadItems(host))));
 
@@ -94,71 +134,137 @@ render(container, host) {
 }
 ```
 
-`host.refresh()` остался как аварийный выход: он принудительно пересобирает **только вашу** карточку (не соседние) — полезно, если что-то пошло не по сигнальной модели и проще всё перестроить, чем разбираться. Хорошо написанный модуль почти никогда его не вызывает.
+`host.refresh()` still exists as an emergency exit: it force-rebuilds **only your own**
+card (never siblings) — useful when something drifted outside the signal model and
+rebuilding is simpler than tracking it down. A well-written module almost never needs
+it.
 
-Внутри `render()` не добавляйте UI напрямую в `document.body` или контейнер ST extension settings — работайте только внутри переданного `container`. Это правило про `render()`, а не про модуль целиком: DOM-код за пределами `container`, созданный из `activate()` как побочный эффект — чат-бейджи (RP Time, Tracker) или отдельная плавающая панель (Tracker HUD) — сознательно разрешён, потому что это другая UI-поверхность со своим жизненным циклом (создаётся один раз в `activate()`, удаляется в cleanup), а не часть карточки настроек.
+Inside `render()`, don't append UI directly to `document.body` or ST's own extension
+settings container — stay inside the `container` you were given. That rule is about
+`render()` specifically, not the module as a whole: DOM built from `activate()` as a
+side effect and living outside `container` — chat badges (RP Time, Tracker) or a
+detached floating panel (Tracker's HUD) — is deliberately allowed, because that's a
+different UI surface with its own lifecycle (built once in `activate()`, torn down in
+cleanup), not part of the settings card.
 
-## Защита от ошибок
+## Error protection
 
-Движок изолирует три класса ошибок:
+The engine isolates three classes of failure:
 
-- ошибка в `activate()` не запускает только данный модуль;
-- ошибка в `render()` заменяет его содержимое карточкой ошибки;
-- синхронная или асинхронная ошибка в callback из `host.onEvent()` перехватывается и логируется.
+- a throw inside `activate()` only takes down that module;
+- a throw inside `render()` replaces its content with an error card;
+- a sync or async error inside an `host.onEvent()` callback is caught and logged.
 
-Остальные модули и основной UI продолжают работать. Пользователь увидит кнопку **Retry module**. Всё, что относится к конкретному модулю, всё равно нужно оборачивать в понятные проверки входных данных и возвращать cleanup.
+Every other module and the main UI keep working. The user sees a **Retry module**
+button. Anything module-specific still needs its own sane input validation and must
+still return a cleanup function.
 
-### Защита от реентерабельного/шквального `CHAT_CHANGED`
+### Protection against a reentrant/bursty `CHAT_CHANGED`
 
-Отдельная защита — для диспетчера `host.onChatChanged()`, на случай если что-то, что вызывает листенер (например, запись в `chatMetadata`), спровоцирует ST на повторный `CHAT_CHANGED`:
+A separate guard exists for the `host.onChatChanged()` dispatcher, for the case where
+something a listener does (say, a write into `chatMetadata`) provokes ST into firing
+`CHAT_CHANGED` again:
 
-- **Реентерабельность.** Если обработка `CHAT_CHANGED` провоцирует новый `CHAT_CHANGED` **до того**, как первый диспетч завершился, вложенный вызов **отбрасывается** — листенеры не выполняются повторно внутри самих себя.
-- **Шквальный лимит.** Больше 8 срабатываний `CHAT_CHANGED` за 2 секунды — это не обычное переключение чата; движок логирует ошибку и пропускает диспетчинг, пока всплеск не утихнет сам (окно скользящее — как только событий не было 2 секунды, диспетчинг возобновляется автоматически).
-- Каждый листенер, как и в `onEvent()`, обёрнут в try/catch с обработкой отклонённого промиса — упавший листенер одного модуля не блокирует остальные.
+- **Reentrancy.** If handling `CHAT_CHANGED` provokes a new `CHAT_CHANGED` **before**
+  the first dispatch has finished, the nested call is **dropped** — listeners never run
+  re-entrantly inside themselves.
+- **Burst limit.** More than 8 `CHAT_CHANGED` firings within 2 seconds isn't a normal
+  chat switch; the engine logs an error and skips dispatching until the burst quiets
+  down on its own (a sliding window — dispatching resumes automatically once no event
+  has fired for 2 seconds).
+- Every listener, exactly like in `onEvent()`, is wrapped in try/catch with rejected-
+  promise handling — one module's broken listener never blocks the others.
 
-Это полезная защита сама по себе (и `store.settings()` в `modules/notebook/store.js` по-прежнему пишет в `chatMetadata` только когда значение реально требует нормализации, а не при каждом чтении), но она **не** была настоящей причиной реального бага с зависанием — см. следующий раздел.
+This is useful protection in its own right (and `store.settings()` in
+`modules/notebook/store.js` still only writes to `chatMetadata` when a value genuinely
+needs normalizing, never on every read), but it was **not** the real cause of a genuine
+hang bug this project shipped once — see the next section.
 
-### Реальная причина зависания: живая итерация Set + утечка зависимости через `show()`/`list()`
+### The real cause of that hang: live `Set` iteration + a dependency leak through `show()`/`list()`
 
-Отдельно от `CHAT_CHANGED` был найден и исправлен куда более фундаментальный баг — синхронный бесконечный цикл без роста стека вызовов (поэтому не было ни ошибки переполнения стека, ни зависшего `await`; просто вкладка переставала отвечать, а память росла, пока браузер/компьютер не зависали). Механизм — комбинация двух вещей:
+Separately from `CHAT_CHANGED`, a far more fundamental bug was found and fixed — a
+synchronous infinite loop with no growing call stack (so there was neither a stack
+overflow nor a hung `await`; the tab simply stopped responding while memory climbed
+until the browser/computer locked up). The mechanism was a combination of two things:
 
-1. **`ModuleDataBus`** (`core/data-bus.js`) при рассылке значения по каналу перебирал слушателей через `for (const listener of this.#listeners.get(id))` — **живой** обход `Set`. В JS обход `Set`/`Map` через `for...of` живой: элемент, добавленный в коллекцию **во время** текущего прохода, будет посещён в этом же проходе, если обход до него ещё не дошёл.
-2. **`show()`/`list()`** (`core/dom.js`) вызывали `renderFn`/`renderItem` (а значит и `module.render()`) синхронно **внутри тела своего собственного эффекта**. Любое «голое» чтение сигнала внутри `render()` (например, `signal(store.settings())`, где `settings()` — сигнал, читаемый не через `computed`/`effect`, а напрямую) в этот момент ошибочно засчитывалось зависимостью **эффекта `show()`**, а не самого модуля — потому что `core/reactive.js` отслеживает «текущий активный эффект» одной общей переменной на весь модуль, без разбора вложенности.
+1. **`ModuleDataBus`** (`core/data-bus.js`), when dispatching a value on a channel,
+   iterated listeners via `for (const listener of this.#listeners.get(id))` — a **live**
+   `Set` traversal. In JS, iterating a `Set`/`Map` with `for...of` is live: an item added
+   to the collection **during** the current pass is visited in that same pass, as long
+   as the iterator hasn't already passed it.
+2. **`show()`/`list()`** (`core/dom.js`) called `renderFn`/`renderItem` (and therefore
+   `module.render()`) synchronously **from inside the body of their own effect**. Any
+   "bare" signal read inside `render()` (e.g. `signal(store.settings())`, where
+   `settings()` is a signal read directly rather than through `computed`/`effect`) was,
+   at that moment, wrongly counted as a dependency of `show()`'s own effect rather than
+   the module's — because `core/reactive.js` tracks "the current active effect" as one
+   shared variable for the whole module, with no awareness of nesting.
 
-Вместе это давало самоподдерживающийся цикл: запись в шину → рассылка слушателям → один из слушателей меняет сигнал, утёкший в `show()` → эффект `show()` перезапускается → он заново вызывает `module.render()` → модуль заново подписывается на ту же самую шину (`host.data.subscribe(...)`) → это добавление **новой** записи в тот же `Set`, который прямо сейчас перебирает внешний `for...of` из пункта 1 → новый слушатель посещается **в том же самом проходе** → снова меняет сигнал → снова… Каждый виток — это обычный возврат из вызова (не рекурсия вглубь), поэтому стек не растёт и не падает; цикл просто крутится вечно, на каждом витке аллоцируя новый DOM/сигналы/подписки.
+Together these formed a self-sustaining loop: a bus write → dispatch to listeners → one
+listener changes a signal that leaked into `show()` → `show()`'s effect re-runs → it
+calls `module.render()` again → the module re-subscribes to that same bus key
+(`host.data.subscribe(...)`) → this adds a **new** entry to the very `Set` the outer
+`for...of` from point 1 is iterating right now → the new listener gets visited **in
+that same pass** → it changes the signal again → repeat forever. Every turn is an
+ordinary function return, not deeper recursion, so the stack never grows or overflows;
+the loop just spins forever, allocating fresh DOM/signals/subscriptions on every pass.
 
-Оба конца исправлены структурно, для всех модулей сразу:
+Both ends were fixed structurally, for every module at once:
 
-- `#applyWrite()`/`restore()` в `core/data-bus.js` теперь перебирают **снимок** (`[...(this.#listeners.get(id) ?? [])]`), а не живой `Set` — слушатель, подписавшийся во время рассылки, будет вызван только на следующей записи, не в текущем проходе.
-- `core/reactive.js` получил `untrack(fn)` — выполняет `fn` с временно отключённым отслеживанием зависимостей. `show()`/`list()` в `core/dom.js` теперь вызывают `renderFn`/`renderItem` (а значит и `module.render()`) через `untrack()`, так что любое голое чтение сигнала внутри `render()` модуля больше не может утечь зависимостью в эффект `show()`/`list()`.
+- `#applyWrite()`/`restore()` in `core/data-bus.js` now iterate a **snapshot**
+  (`[...(this.#listeners.get(id) ?? [])]`), not a live `Set` — a listener that
+  subscribes mid-dispatch is only called on the *next* write, never in the current pass.
+- `core/reactive.js` gained `untrack(fn)` — runs `fn` with dependency tracking
+  temporarily suspended. `show()`/`list()` in `core/dom.js` now call
+  `renderFn`/`renderItem` (and therefore `module.render()`) through `untrack()`, so a
+  bare signal read inside a module's `render()` can no longer leak as a dependency of
+  `show()`'s/`list()`'s own effect.
 
-**Практический вывод для авторов модулей**: писать `signal(someOtherSignal())` (голое чтение) прямо в теле `render()` теперь безопасно с точки зрения этого класса утечки — движок гарантирует изоляцию. Но правило «не пишите непременно при каждом вызове» из предыдущего раздела остаётся в силе само по себе — это про лишние записи в `chatMetadata`, а не про утечку зависимостей.
+**Practical takeaway for module authors**: writing `signal(someOtherSignal())` (a bare
+read) directly inside `render()`'s body is now safe with respect to this class of leak —
+the engine guarantees the isolation. The "don't write unconditionally on every call"
+rule from the previous section still stands on its own, though — that one is about
+avoiding needless `chatMetadata` writes, not dependency leaks.
 
-### Идемпотентность вызовов в ST на каждый `CHAT_CHANGED`
+### Idempotent calls into ST on every `CHAT_CHANGED`
 
-Отдельная категория риска — не внутри движка, а на границе с самим ST. `host.onChatChanged(listener)` вызывает `listener()` на **каждое** переключение чата; если `listener` безусловно вызывает `context.setExtensionPrompt(...)` (или любой другой ST API, который может спровоцировать сохранение/пересчёт на стороне ST), то ST теоретически может отреагировать на этот вызов чем-то, что снова провоцирует `CHAT_CHANGED` — и в этом случае защита реентерабельности/шквала в движке лишь ограничивает урон (не даёт зависнуть намертво), но не устраняет сам цикл: пока наш листенер продолжает вызывать `setExtensionPrompt` заново на КАЖДОЕ повторное срабатывание, цикл может продолжаться неопределённо долго с точки зрения ST, даже если движок перестал в нём участвовать после шквального лимита.
+A separate category of risk lives not inside the engine but at the boundary with ST
+itself. `host.onChatChanged(listener)` calls `listener()` on **every** chat switch; if
+`listener` unconditionally calls `context.setExtensionPrompt(...)` (or any other ST API
+that might provoke a save/recompute on ST's side), ST could in theory react to that call
+with something that fires `CHAT_CHANGED` again — and in that case the engine's
+reentrancy/burst guard only limits the damage (it stops the tab from hanging outright),
+it doesn't remove the cycle: as long as the listener keeps calling `setExtensionPrompt`
+again on EVERY repeated firing, the cycle can keep going indefinitely from ST's point of
+view, even after the engine itself has stopped participating past the burst limit.
 
-Правильный паттерн — сделать сам вызов в ST **идемпотентным**: запоминать последнее реально установленное значение и пропускать вызов, если оно не изменилось. `modules/notebook/index.js`'s `inject()`/`notify()` теперь пример: сравнивают вычисленную «подпись» (глубину + текст промпта) с последней уже отправленной и не трогают `context.setExtensionPrompt`, если она совпала. Это не только защита от гипотетической петли — это ещё и просто меньше лишней работы на ровном месте (переключение чата туда-обратно не должно каждый раз пересобирать и заново отправлять один и тот же промпт).
+The right pattern is to make the call into ST itself **idempotent**: remember the last
+value you actually set, and skip the call if it hasn't changed. `modules/notebook/index.js`'s
+`inject()`/`notify()` are the working example: they compare a computed "signature"
+(depth + prompt text) against the last one actually sent, and never touch
+`context.setExtensionPrompt` if it matches. This isn't only protection against a
+hypothetical loop — it's also just less pointless work: switching chats back and forth
+shouldn't rebuild and resend the same prompt every single time.
 
-## API `host`
+## The `host` API
 
-| API | Назначение |
+| API | Purpose |
 | --- | --- |
-| `host.id` | Идентификатор текущего модуля. |
-| `host.context()` | Актуальный `SillyTavern.getContext()`. Используйте только там, где нужен ST API. |
-| `host.refresh()` | Принудительно пересобрать `render()` только этого модуля (аварийный выход — обычно не нужен, см. `render()` выше). |
-| `host.toast(level, message, title?)` | Показать ST toastr-уведомление. |
-| `host.moduleSettings(defaults)` | Получить сохраняемые настройки текущего модуля. |
-| `host.saveModuleSettings()` | Сохранить настройки текущего модуля. |
-| `host.setPrompt(key, prompt, position, depth, role)` | Установить extension prompt. |
-| `host.registerTool(definition)` / `host.unregisterTool(name)` | Работа с native function tool. |
-| `host.onEvent(eventType, callback)` | Подписка на ST event; возвращает unsubscribe. |
-| `host.onChatChanged(callback)` | Упрощённая подписка на смену чата; возвращает unsubscribe. Диспетчер защищён от реентерабельного/шквального повтора — см. ниже. |
-| `host.sidecar` | Общий клиент модели и профилей. |
-| `host.data` | Шина обмена данными между модулями — get/set/subscribe плюс опциональное резервирование каналов (схема, защита от чужой записи, история/restore, ST-макрос, вебхук). См. раздел ниже. |
-| `host.services` | Реестр сервисов, которые предоставляют сами модули: push (`register`/`get`/`request`/`isAvailable`) и pull, запрос-ответ (`ask(name, type, payload)`) — тот же принцип запрос/поставщик, что у `host.sidecar`, но обобщённый на любой модуль. См. раздел ниже. |
+| `host.id` | The current module's identifier. |
+| `host.context()` | The live `SillyTavern.getContext()`. Use it only where you actually need the ST API. |
+| `host.refresh()` | Force-rebuild `render()` for this module only (emergency exit — usually not needed, see `render()` above). |
+| `host.toast(level, message, title?)` | Show an ST toastr notification. |
+| `host.moduleSettings(defaults)` | Get this module's persisted settings. |
+| `host.saveModuleSettings()` | Persist this module's settings. |
+| `host.setPrompt(key, prompt, position, depth, role)` | Set an extension prompt. |
+| `host.registerTool(definition)` / `host.unregisterTool(name)` | Register/unregister a native function tool. |
+| `host.onEvent(eventType, callback)` | Subscribe to an ST event; returns an unsubscribe function. |
+| `host.onChatChanged(callback)` | Simplified chat-change subscription; returns unsubscribe. The dispatcher is protected against reentrant/bursty repeats — see above. |
+| `host.sidecar` | The shared model/profile client. |
+| `host.data` | The inter-module data bus — get/set/subscribe plus optional channel reservation (schema, ownership protection, history/restore, ST macro, webhook, `unreserve()`). See the section below. |
+| `host.services` | The registry of services modules provide to each other: push (`register`/`get`/`request`/`isAvailable`) and pull, request-response (`ask(name, type, payload)`) — the same request/provider shape as `host.sidecar`, generalized to any module. See the section below. |
 
-## Сохраняемые module settings
+## Persisted module settings
 
 ```js
 const settings = host.moduleSettings({
@@ -170,105 +276,224 @@ settings.limit = 20;
 host.saveModuleSettings();
 ```
 
-Значения сохраняются в конфигурации движка. Они предназначены для сериализуемых данных: строк, чисел, boolean, массивов и plain object. Для данных текущего чата используйте `context.chatMetadata`.
+Values are saved into the engine's own config. They're meant for serializable data —
+strings, numbers, booleans, arrays, plain objects. For anything scoped to the current
+chat, use `context.chatMetadata` instead.
 
-## Data bus: обмен данными между модулями
+## The data bus: exchanging data between modules
 
-`host.data` — общая шина (`core/data-bus.js`), независимая от логики конкретного модуля. Базовый слой — простой runtime key/value store с подпиской, ведёт себя как раньше:
+`host.data` is the shared bus (`core/data-bus.js`), independent of any one module's
+logic. The base layer is a plain runtime key/value store with subscriptions, and it
+behaves exactly as it sounds:
 
 ```js
-host.data.set('lastResult', { score: 12 });          // в свой namespace (id модуля)
+host.data.set('lastResult', { score: 12 });          // into your own namespace (module id)
 const result = host.data.get('lastResult');
 host.data.remove('lastResult');
 
-host.data.write('time', 'lastResult', { label: 'Day 2, 13:00' });  // в чужой namespace — разрешено технически
+host.data.write('time', 'lastResult', { label: 'Day 2, 13:00' });  // into someone else's namespace — technically allowed
 const value = host.data.read('time', 'lastResult', null);
 
 const unsubscribe = host.data.subscribe('time', 'lastResult', value => console.debug('New RP time:', value));
 return () => unsubscribe();
 ```
 
-Это по-прежнему **не изоляция, а конвенция**: `write()` в чужой namespace никто не проверяет, если тот НЕ зарезервирован (см. ниже). Пишите в свой namespace по умолчанию; `write()` в чужой — редкий, осознанный случай.
+This is still **convention, not isolation**: nothing stops `write()` into a namespace
+that isn't reserved (see below). Write into your own namespace by default; writing into
+someone else's is a rare, deliberate exception.
 
-### Резервирование: `host.data.reserve(key, options)`
+### Reservation: `host.data.reserve(key, options)`
 
-Превращает голый ключ в **канал** — объявленный, проверяемый контракт вместо «кто-то что-то туда положил». Резервирует всегда в СВОЁМ namespace (id вызывающего модуля); резервировать чужой канал нельзя — в этом и разница между `reserve()` и `write()`.
+Turns a bare key into a **channel** — a declared, checked contract instead of "someone
+put something there." Always reserves in your OWN namespace (the caller's module id);
+you cannot reserve someone else's channel — that's the difference between `reserve()`
+and `write()`.
 
 ```js
 const channel = host.data.reserve('health', {
-  name: 'Vitals — health',           // человекочитаемое имя — искать по нему через host.data.findByName()
-  schema: { type: 'string' },        // или функция (value) => true | 'текст ошибки'
-  allowExternalWrite: false,         // по умолчанию писать может только владелец
-  macro: 'tracker_vitals_health',    // см. «Три вида блоков» ниже
+  name: 'Vitals — health',           // human-readable name — look it up via host.data.findByName()
+  schema: { type: 'string' },        // or a function (value) => true | 'error text'
+  allowExternalWrite: false,         // by default only the owner can write
+  macro: 'tracker_vitals_health',    // see "Three kinds of channels" below
   webhook: { pushUrl, pullUrl, pullIntervalMs },
-  persist: true,                     // см. «Персистентность» ниже
+  persist: true,                     // see "Persistence within a chat" below
 });
-// channel.id === 'my-module:health'; channel.unreserve() отменяет резервирование вручную —
-// но engine и так делает это автоматически при disable() (см. ниже).
+// channel.id === 'my-module:health'; channel.unreserve() retires it by hand —
+// though the engine already does this automatically on disable() (see below).
 ```
 
-`set(key, value)` / `write(namespace, key, value)` на зарезервированный канал теперь проходят через защиту:
+`set(key, value)` / `write(namespace, key, value)` against a reserved channel now go
+through protection:
 
-- **Схема.** Значение, не прошедшее `schema`, отклоняется, логируется и не доходит до подписчиков — последнее валидное значение остаётся на месте. Плохо написанный модуль не может испортить данные, на которые полагаются другие.
-- **Владение.** Запись НЕ из модуля-владельца отклоняется, если при резервировании не указано `allowExternalWrite: true`.
-- **Rate limit.** Больше ~20 записей/сек в один канал — канал временно глушится (защита от бага с бесконечным циклом записи).
+- **Schema.** A value that fails `schema` is rejected, logged, and never reaches
+  subscribers — the last valid value stays put. A badly written module can't corrupt
+  data other modules rely on.
+- **Ownership.** A write from anywhere other than the owning module is rejected unless
+  `allowExternalWrite: true` was set at reservation time.
+- **Rate limit.** More than ~20 writes/sec into one channel trips a temporary breaker
+  (protection against an infinite-write-loop bug).
 
-Отклонённая запись называется здесь «заражением» (contamination) — залогирована через `console.warn` и (если engine передал `onContaminate`) видна в его логе; в `#values` она не попадает.
+A rejected write is called "contamination" here — logged via `console.warn` and (if the
+engine was given `onContaminate`) visible in its log; it never reaches `#values`.
 
-### Бэкап: `history()` и `restore()`
+### Retiring a channel: `unreserve()` — for a list of channels that can shrink
 
-Каждая принятая запись хранит последние 10 значений с таймстампами:
+`channel.unreserve()` (from the handle `reserve()` returns) or the equivalent
+`host.data.unreserve(key)` (addressable by key alone, no handle needed) fully retires a
+channel: its protections, its ST macro registration, its value, and its history are all
+gone — not just the schema/ownership checks. Use it whenever your module's own set of
+channels can **shrink while the module stays enabled** — a user-removable field, a
+deletable block, anything with a "remove" button in your own UI.
 
 ```js
-host.data.history('health');              // [{ value, at }, ...] новые сверху
-host.data.restore('health', 1);            // откатить на 1 шаг назад — без повторной валидации
+host.data.reserve(`field:${id}`, { macro: macroSlug(id) });
+// ... later, the user removes this field from your own config:
+host.data.unreserve(`field:${id}`);
 ```
 
-### Логистика по ID и Name
+Without this, a channel (and its `{{macro}}`, if it had one) reserved for something the
+user later removes just keeps resolving to its last known value forever — there's
+nothing else telling the bus it's gone. `modules/tracker/index.js`'s `publish()` is the
+worked example: on every re-publish it diffs the current set of blocks/fields against
+what it published last time, and `unreserve()`s anything that dropped out (a removed
+field, or an entire deleted block) — see
+[Pattern: reconciling a dynamic set of channels](#pattern-reconciling-a-dynamic-set-of-channels)
+below for the full shape of that pattern, including how it also handles a block that's
+merely *disabled* (not removed).
 
-`host.data.listChannels(namespace?)` — список зарезервированных каналов (свой namespace или все). `host.data.findByName(name)` — найти канал по человекочитаемому имени, а не только по техническому `namespace:key`.
+`releaseNamespace()` (used automatically on module disable, see below) is really
+`unreserve()` applied to every channel a module owns at once, plus a sweep for anything
+that was ever `set()` under that namespace without going through `reserve()` at all.
 
-### Три вида блоков (что можно резервировать и зачем)
+### Backups: `history()` and `restore()`
 
-1. **Внутренний** — между модулями движка. Это то, что уже было: `set`/`get`/`subscribe`, теперь опционально со схемой и защитой владения. Пример: `host.data.subscribe('tracker', 'blocks', ...)`.
-2. **Публичный, читаемый где угодно в ST** — через `macro: 'имя'`. Резервирование регистрирует ST-макрос (`context.registerMacro`, современный `context.macros.register()` — если он появится у пользователя — используется первым по фиче-детекту): значение канала становится доступно как `{{имя}}` в промптах, World Info, карточке персонажа, Quick Replies — везде, где сам ST прогоняет macro-substitution, а не только там, куда модуль сам вставляет текст. Обработчик синхронный и читает **текущее** значение канала на каждый вызов — ничего кешировать не нужно. Коллизия имени макроса с уже занятым — отклоняется и логируется как contamination, canal без макро продолжает работать. Живой пример — `modules/tracker/index.js`: `{{tracker_<title>_<field>}}` на каждое отслеживаемое поле.
-3. **Внешний, через API вовне ST** — `webhook: { pushUrl, pullUrl, pullIntervalMs }`. Расширение — код в браузере пользователя и физически не может принимать входящие запросы (поднять сервер); оно может только САМО сходить наружу: `pushUrl` — POST при каждой принятой записи (fire-and-forget, ошибка сети не блокирует запись и не бросает исключение); `pullUrl` — периодический GET (не чаще раза в 5с), результат идёт через ТУ ЖЕ валидацию (схема + `allowExternalWrite`), что и любая чужая запись — внешние данные наименее доверенные, поэтому именно для pull практически всегда нужен `allowExternalWrite: true` вместе со схемой. **URL всегда должен быть полем настроек, которое вводит пользователь** (как endpoint у SideCar) — никогда не хардкодьте чужой адрес внутри модуля.
+Every accepted write keeps the last 10 values with timestamps:
 
-### Персистентность внутри чата: `persist: true`
+```js
+host.data.history('health');              // [{ value, at }, ...] newest first
+host.data.restore('health', 1);            // roll back one step — no re-validation
+```
 
-По умолчанию шина полностью in-memory и не переживает перезагрузку страницы. `persist: true` при резервировании зеркалирует каждую принятую запись в `chatMetadata` (тот же механизм, что уже хранит заметки Notebook и состояние Tracker) и восстанавливает последнее значение прямо в момент вызова `reserve()` — так подписчик (например, HUD-панель) не видит пустоту в первые секунды после reload, ещё до того как модуль успеет заново опубликовать состояние. `remove(key)` на persist-канале также стирает сохранённую копию. Включайте только для того, что действительно должно пережить reload, — большая часть шинного трафика производная и не стоит записи на диск при каждом тике.
+### Finding channels by id or name
 
-### Очистка при отключении модуля
+`host.data.listChannels(namespace?)` — lists reserved channels (your own namespace, or
+all of them). `host.data.findByName(name)` — finds a channel by its human-readable name,
+not just its technical `namespace:key`.
 
-Engine сам вызывает `host.data`-эквивалент `releaseNamespace(moduleId)` сразу после `cleanup()` при disable — снимает резервирование ВСЕХ каналов модуля (включая отмену макросов и остановку pull-таймеров) и стирает их значения, даже если `cleanup()` что-то забыл. Ручной `host.data.remove(...)` в `cleanup()` для зарезервированных каналов не нужен — только для действительно временных данных с более узким временем жизни, чем у самого модуля.
+### Three kinds of channels (what you can reserve, and why)
 
-### Паттерн: продюсер публикует, а не просто уведомляет
+1. **Internal** — between engine modules. This is what already existed: `set`/`get`/
+   `subscribe`, now optionally with a schema and ownership protection. Example:
+   `host.data.subscribe('tracker', 'blocks', ...)`.
+2. **Public, readable anywhere in ST** — via `macro: 'name'`. Reservation registers an
+   ST macro (`context.registerMacro`, with the modern `context.macros.register()` used
+   first via feature-detection if the user's ST build has it): the channel's value
+   becomes available as `{{name}}` in prompts, World Info, the character card, Quick
+   Replies — everywhere ST itself resolves macro substitution, not only wherever a
+   module inserts text by hand. The handler is synchronous and reads the channel's
+   **current** value on every call — nothing needs caching. A macro-name collision with
+   one already taken is rejected and logged as contamination; the channel itself keeps
+   working, just without a macro. A live example is `modules/tracker/index.js`:
+   `{{tracker_<title>_<field>}}` for every tracked field.
+3. **External, via an API outside ST** — `webhook: { pushUrl, pullUrl, pullIntervalMs }`.
+   The extension is code running in the user's browser and physically cannot accept
+   inbound requests (there's no server to stand up); it can only reach out itself:
+   `pushUrl` — a fire-and-forget POST on every accepted write (a network error neither
+   blocks the write nor throws); `pullUrl` — a periodic GET (no more often than once per
+   5s), and the result goes through the exact same validation (schema + external-write
+   check) as any other outside write — pulled data is the least trusted kind, so a pull
+   channel almost always needs `allowExternalWrite: true` alongside a schema. **The URL
+   must always be a setting the user types in** (the same way SideCar's endpoint is) —
+   never hardcode someone else's address inside a module.
 
-Если модуль-продюсер пишет в bus только по событию (например, «после ответа модели»), то до следующего события подписчик видит пустоту или устаревшие данные (если только канал не `persist: true`, см. выше). Поэтому:
+### Persistence within a chat: `persist: true`
 
-- Публикуйте **полное текущее состояние** сразу в `activate()`, а не только при изменениях.
-- Держите одну функцию `publish()`, вызывайте её из каждого места, где меняется опубликованное состояние (включая `render()`, если UI меняет структуру). Проще перепубликовать всё целиком, чем точечно патчить.
-- Никогда не публикуйте секреты или внутренние детали (API-ключи, промпт-шаблоны, SideCar-профиль). Заведите отдельную чистую функцию вида `describeXForBus(x)`, которая явно решает, что уходит наружу, и покройте её тестом.
+By default the bus is entirely in-memory and doesn't survive a page reload.
+`persist: true` at reservation time mirrors every accepted write into `chatMetadata`
+(the same mechanism that already stores Notebook's notes and Tracker's state) and
+restores the last value right at `reserve()` time — so a subscriber (a HUD panel, say)
+never sees emptiness in the first seconds after reload, before the module has had a
+chance to re-publish. `remove(key)` on a persisted channel also clears the saved copy.
+Turn this on only for what genuinely needs to survive a reload — most bus traffic is
+derived and not worth a disk write on every tick.
 
-### Паттерн: индекс + переподписка для динамических коллекций
+### Cleanup on module disable
 
-`subscribe(namespace, key, listener)` подписывается на один конкретный ключ — нет wildcard/prefix-подписки на «всё в namespace». Стандартная идиома для динамического списка сущностей:
+The engine calls the `host.data` equivalent of `releaseNamespace(moduleId)` right after
+`cleanup()` runs on disable — it retires every channel the module owns (unregistering
+macros, stopping pull timers) and clears their values, even if `cleanup()` forgot
+something. A manual `host.data.remove(...)` in `cleanup()` for a reserved channel isn't
+needed — only for genuinely temporary data with a narrower lifetime than the module
+itself.
 
-1. Публикуйте индекс под известным ключом (например, `blocks` → список `{ id, ... }`).
-2. Подпишитесь на этот индекс. В колбэке — отпишитесь от всех предыдущих подписок на элементы и подпишитесь заново на `entry:<id>` для каждого элемента из нового индекса.
-3. Так подписчик не должен заранее знать список id — только один известный ключ-индекс.
+### Pattern: a producer publishes, it doesn't just notify
 
-Пример такой пары продюсер/потребитель — `modules/tracker/index.js` (`publish()` резервирует и пишет `blocks` + `block:<id>` + `field:<id>:<name>`, `resubscribeBlocks()` читает индекс и переподписывается на элементы для отдельной плавающей панели).
+If a producer module only writes to the bus in response to an event (say, "after the
+model replies"), a subscriber sees emptiness or stale data until the next event happens
+(unless the channel is `persist: true`, see above). So:
 
-### DOM-узлы и функции на шине — можно, но это приватный RPC, а не публичный контракт
+- Publish the **full current state** right in `activate()`, not only on changes.
+- Keep one `publish()` function, call it from every place the published state changes
+  (including `render()`, if the UI can change the structure). It's simpler to republish
+  everything than to patch it piecemeal.
+- Never publish secrets or internal details (API keys, prompt templates, a SideCar
+  profile). Write a small, dedicated `describeXForBus(x)` function that decides
+  explicitly what leaves the module, and cover it with a test.
 
-`host.data` не сериализует значения — можно положить туда живую ссылку на DOM-элемент или функцию (например, чтобы `render()` мог достать HUD-панель, созданную в `activate()`, или вызвать `publish()` из другого замыкания того же модуля). Это осознанно разрешено и удобно **внутри одного модуля**. Но не стройте на этом публичный API для других модулей — такая ссылка переживает только текущую сессию страницы; для межмодульного обмена публикуйте только простые сериализуемые данные. Резервирование (схема, persist, макрос, webhook) в принципе имеет смысл только для сериализуемых значений — не резервируйте канал с DOM-узлом/функцией.
+### Pattern: reconciling a dynamic set of channels
+
+`modules/tracker/index.js`'s `publish()` is the reference implementation for a producer
+whose set of channels can shrink or change meaning (a field/block removed by the user,
+or a block merely disabled) while the module itself stays enabled:
+
+1. Keep a small in-memory map from the last publish (e.g. `blockId -> Set<fieldName>`).
+2. On each `publish()`, first diff the *current* configuration against that map and
+   `unreserve()` anything that no longer exists (a removed field's channel, or —
+   because the block itself was deleted — every channel that block ever owned).
+3. For something still configured but **disabled** rather than removed, don't just skip
+   publishing it (that would leave its last real value frozen forever) — publish an
+   explicit notice value (e.g. `'(tracking disabled)'`) into its channel(s), so a
+   `{{macro}}` reader sees a clear, current signal instead of stale data with no
+   indication it stopped being tracked.
+4. Always call `set()` for a channel, even with an empty value — a value that used to
+   be truthy and just got cleared (a user hitting "reset") must actually clear the bus
+   too, not silently keep whatever was there because a falsy new value used to skip the
+   write.
+
+### Pattern: index + re-subscribe for dynamic collections
+
+`subscribe(namespace, key, listener)` subscribes to one specific key — there's no
+wildcard/prefix subscription for "everything in a namespace." The standard idiom for a
+dynamic list of entities:
+
+1. Publish an index under a known key (e.g. `blocks` → a list of `{ id, ... }`).
+2. Subscribe to that index. In the callback, unsubscribe from every previous per-entry
+   subscription and re-subscribe to `entry:<id>` for each item in the new index.
+3. This way a subscriber never needs to know the list of ids ahead of time — only the
+   one known index key.
+
+The worked producer/consumer pair for this is `modules/tracker/index.js`
+(`publish()` reserves and writes `blocks` + `block:<id>` + `field:<id>:<name>`,
+`resubscribeBlocks()` reads the index and re-subscribes to the entries for its own
+floating panel).
+
+### DOM nodes and functions on the bus — allowed, but it's a private RPC, not a public contract
+
+`host.data` doesn't serialize values — you can put a live DOM element reference or a
+function on it (e.g. so `render()` can reach a HUD panel `activate()` built, or call
+`publish()` from a different closure in the same module). This is deliberately allowed
+and convenient **within a single module**. Don't build a public API for other modules
+on top of it, though — such a reference only survives the current page session; publish
+only plain, serializable data for cross-module exchange. Reservation (schema, persist,
+macro, webhook) only makes sense for serializable values in the first place — don't
+reserve a channel that holds a DOM node or a function.
 
 ## SideCar
 
-`host.sidecar` предоставляет единый endpoint/API key/model и набор sampler/reasoning профилей. Модуль не получает API key через публичный API.
+`host.sidecar` gives you a single shared endpoint/API key/model and a set of
+sampler/reasoning profiles. A module never gets the API key through the public API.
 
-### Разовый запрос
+### One-off request
 
 ```js
 const answer = await host.sidecar.request({
@@ -278,7 +503,7 @@ const answer = await host.sidecar.request({
 });
 ```
 
-### Lease на lifecycle модуля
+### A lease tied to the module's lifecycle
 
 ```js
 const lease = host.sidecar.acquire('example-worker');
@@ -290,134 +515,238 @@ const answer = await lease.request({
 return () => lease.release();
 ```
 
-Lease не держит постоянное HTTP-соединение. Он лишь обозначает долгоживущий доступ модуля к общему SideCar. Каждый `request()` остаётся отдельным HTTP generation request.
+A lease doesn't keep a persistent HTTP connection open. It only marks the module's
+long-lived access to the shared SideCar. Every `request()` is still its own separate
+HTTP generation request.
 
-### Профили
+### Profiles
 
-Профиль хранит sampler и reasoning параметры, но не endpoint, API key или модель. Пользователь создаёт профиль в карточке SideCar, затем модуль показывает `host.sidecar.profiles()` и сохраняет выбранный `profileId` в `host.moduleSettings()`.
+A profile stores sampler and reasoning parameters, but never the endpoint, API key, or
+model. The user creates a profile in the SideCar card; a module then shows
+`host.sidecar.profiles()` and saves the chosen `profileId` in `host.moduleSettings()`.
 
 ```js
 const profiles = host.sidecar.profiles(); // [{ id, name }, ...]
 ```
 
-Для OpenRouter reasoning-поля применяются только к endpoint, содержащему `openrouter.ai`.
+Reasoning fields for OpenRouter only apply when the endpoint contains `openrouter.ai`.
 
-## `host.services`: сервисы, которые предоставляют сами модули
+## `host.services`: services modules provide to each other
 
-`host.sidecar` — доступ к LLM, встроенный в движок. `host.services` — тот же принцип «запрос/поставщик», но для сервиса, который предоставляет **другой модуль**, а не сам движок. Движок ничего не знает о конкретных именах сервисов и их форме — ни здесь, ни где-либо ещё в `core/module-engine.js` нет ни одной строчки, знающей про Tracker специально. Это значит: чтобы завтра появился второй, третий, десятый модуль-поставщик, в движок лезть не нужно вообще — вся масштабируемость в этом и заключается.
+`host.sidecar` is access to an LLM, built into the engine. `host.services` is the same
+request/provider idea, but for a service that a **different module** provides, not the
+engine itself. The engine has no built-in knowledge of any particular service's name or
+shape — there isn't a single line anywhere in `core/module-engine.js` that knows
+anything specifically about Tracker. That's the point: a second, third, tenth provider
+module can show up tomorrow without ever touching the engine again — that's where all
+the scalability comes from.
 
-### Поставщик: регистрирует сервис в своём `activate()`
+### Provider: registers a service in its own `activate()`
 
 ```js
 activate(host) {
   host.services.register('tracker', {
     track(requesterId, key, options) { /* ... */ return { set(value) {}, remove() {} }; },
   });
-  return () => {}; // unregister не обязателен — движок сам снимает регистрацию при disable()
+  return () => {}; // unregister isn't required — the engine drops the registration on disable() anyway
 }
 ```
 
-### Потребитель: запрашивает сервис
+### Consumer: requests a service
 
 ```js
-const tracker = host.services.request('tracker'); // ВСЕГДА объект, никогда undefined
-const handle = tracker.track(host.id, 'my-value', { name: 'Короткая подпись', initial: '...' });
-handle.set('новое значение');
-// в cleanup:
+const tracker = host.services.request('tracker'); // ALWAYS an object, never undefined
+const handle = tracker.track(host.id, 'my-value', { name: 'Short label', initial: '...' });
+handle.set('new value');
+// in cleanup:
 return () => handle.remove();
 ```
 
-`request(name)` — основной способ потребления: если сервис недоступен (модуль-поставщик выключен или ещё не успел стартовать), возвращается не `undefined`, а «void»-объект — любое обращение к любому свойству на нём — это функция, которая логирует предупреждение и возвращает такой же void-объект дальше. Поэтому `tracker.track(...).set(...).remove()` **никогда не бросает исключение**, сколько бы методов ни было в цепочке, независимо от формы конкретного сервиса — движку не нужно знать, что вообще возвращает `track()`, чтобы это гарантировать. Если нужно явно проверить наличие (например, чтобы не создавать `handle` вхолостую) — `host.services.isAvailable(name)` или `host.services.get(name)` (вернёт `undefined`, если сервиса нет — на этом можно построить свою логику, как с `host.sidecar.isConfigured()`).
+`request(name)` is the main way to consume a service: if it's unavailable (the provider
+module is disabled, or hasn't started yet), you don't get `undefined` — you get a
+"void" object, where touching any property is a function that logs a warning and
+returns another void object. So `tracker.track(...).set(...).remove()` **never throws**,
+no matter how many methods are chained or what shape the real service actually has —
+the engine doesn't need to know what `track()` even returns to guarantee that. If you
+need to check availability explicitly (say, to avoid creating a `handle` for nothing),
+use `host.services.isAvailable(name)` or `host.services.get(name)` (returns `undefined`
+if it's missing — you can build your own logic on that, the same way as
+`host.sidecar.isConfigured()`).
 
-### `ask()` — вторая половина протокола: запрос-ответ, а не только push
+### `ask()` — the other half of the protocol: request-response, not just push
 
-`register`/`get`/`request` покрывают push: поставщик кладёт в объект сервиса произвольные методы (`track()` ниже), и потребитель вызывает их напрямую. Но у сервиса может быть и обратная сторона — потребитель хочет **спросить** поставщика о чём-то по конкретной форме запроса, а не просто вызвать готовый метод. Для этого — `host.services.ask(name, type, payload)`:
+`register`/`get`/`request` cover push: the provider puts arbitrary methods on the
+service object (`track()` above), and the consumer calls them directly. But a service
+can also have the reverse shape — a consumer wants to **ask** the provider something in
+a specific request shape, rather than call a ready-made method. That's
+`host.services.ask(name, type, payload)`:
 
 ```js
-// Поставщик — опционально добавляет handleRequest(type, payload, askerId) к тому же объекту,
-// что уже зарегистрирован через register(). type — вокабуляр запросов, который поставщик сам
-// определяет и документирует; payload — форма, привязанная к этому конкретному type.
+// Provider — optionally adds handleRequest(type, payload, askerId) to the same object
+// already registered via register(). `type` is a request vocabulary the provider
+// defines and documents itself; `payload` is whatever shape that type expects.
 host.services.register('tracker', {
-  track(requesterId, key, options) { /* push, как раньше */ },
+  track(requesterId, key, options) { /* push, as above */ },
   async handleRequest(type, payload, askerId) {
     if (type === 'classify') return await runClassification(payload.vocabulary);
     throw new Error(`unknown type ${type}`);
   },
 });
 
-// Потребитель:
+// Consumer:
 const { keys } = await host.services.ask('tracker', 'classify', { vocabulary: myKeys }) ?? { keys: [] };
 ```
 
-`ask()` — всегда `Promise`, и он **никогда не reject'ится**: сервис недоступен, у него нет `handleRequest`, он не знает такой `type`, обработчик бросил исключение — во всех случаях результат `undefined` (залогировано), а не пойманное потребителем исключение. Не нужен try/catch, чтобы просто задать вопрос, ответ на который может не найтись.
+`ask()` is always a `Promise`, and it **never rejects**: the service is missing, it has
+no `handleRequest`, it doesn't recognize the `type`, the handler throws — every one of
+those resolves to `undefined` (logged), never a caught exception on the consumer's side.
+No try/catch is needed just to ask a question that might not have an answer.
 
-### Пример поставщика: Tracker как двусторонний сервис
+### Worked example: Tracker as a two-way service
 
-Помимо обычных блоков, настраиваемых руками в своей карточке, Tracker — поставщик сервиса `'tracker'` в обе стороны:
+Beyond its own hand-configured blocks, Tracker is a provider of the `'tracker'` service
+in both directions:
 
-- **Push** — `track(requesterId, key, options)`: любой другой модуль может запросить отслеживание значения программно, без создания блока. Результат отображается в самом Tracker отдельной секцией **Quick tracked values** — компактно, и **принципиально без возможности редактирования**: раз значение поставляет код другого модуля, у пользователя нет причин (и способа) его туда вписать руками. Владеет значением тот, кто его запросил (`host.id`, передаётся первым аргументом), — он же обязан вызвать `handle.remove()` в своём `cleanup()`, ровно как с `sidecar`-lease. Каждое такое значение к тому же — обычный зарезервированный канал шины: у него есть схема, персистентность и, если Tracker включён, свой ST-макрос.
-- **Pull** — `handleRequest('classify', { vocabulary, profileId? })`: асинхронно гоняет один SideCar-запрос и возвращает `{ keys }` — какие из **чужого** словаря ключей (до 50, словарь не принадлежит Tracker — его каждый раз даёт спрашивающий) подходят под текущую сцену.
+- **Push** — `track(requesterId, key, options)`: any other module can request a value
+  be tracked programmatically, without creating a block by hand. The result shows up in
+  Tracker itself as a compact **Quick tracked values** section — and deliberately
+  **cannot be edited there**: since the value comes from another module's code, there's
+  no reason (and no way) for the user to type it in by hand. Whoever requested it
+  (`host.id`, passed as the first argument) owns it, and is responsible for calling
+  `handle.remove()` in its own `cleanup()`, exactly like a `sidecar` lease. Each such
+  value is also a plain reserved bus channel — it has a schema, persistence, and (while
+  Tracker is enabled) its own ST macro.
+- **Pull** — `handleRequest('classify', { vocabulary, profileId? })`: runs one SideCar
+  request asynchronously and returns `{ keys }` — which of the **asker's own** vocabulary
+  of keys (up to 50; the vocabulary doesn't belong to Tracker, the asker supplies it
+  every time) fit the current scene.
 
-Оба — в `modules/tracker/index.js`. Живой потребитель обеих сторон — модуль **Music** (`modules/music/index.js`): спрашивает `classify` у Tracker, чтобы получить ключи сцены, и по ним выбирает трек.
+Both live in `modules/tracker/index.js`. A live consumer of both sides is the **Music**
+module (`modules/music/index.js`): it asks Tracker for `classify` to get the scene's
+keys, then picks a track by them.
 
-## UI-фреймворк: `core/reactive.js` + `core/dom.js` + `core/widgets.js`
+## The UI framework: `core/reactive.js` + `core/dom.js` + `core/widgets.js`
 
-Всё, что нужно для `render()`, — импорт из `core/widgets.js` (он же реэкспортирует нужное из `dom.js`/`reactive.js`, отдельно их подключать не нужно).
+Everything `render()` needs is one import from `core/widgets.js` (it re-exports what it
+needs from `dom.js`/`reactive.js` — no need to import those separately).
 
-### Сигналы
+### Signals
 
 ```js
 import { signal, computed, effect } from '../../core/widgets.js';
 
-const count = signal(0);       // count() — читать, count.set(5) / count.update(n => n+1) — писать, count.peek() — читать без подписки
-const doubled = computed(() => count() * 2);   // пересчитывается сам при изменении count
-const dispose = effect(() => console.log(doubled()));  // сразу выполняется и перезапускается на каждое изменение зависимостей
+const count = signal(0);       // count() reads, count.set(5) / count.update(n => n+1) writes, count.peek() reads without subscribing
+const doubled = computed(() => count() * 2);   // recomputes itself when count changes
+const dispose = effect(() => console.log(doubled()));  // runs immediately, re-runs on every dependency change
 ```
 
-Синхронно, без батчинга: `set()` немедленно уведомляет всех, кто читал сигнал внутри `effect`/`computed`. Внутри `h()`-биндингов (ниже) диспоз эффектов происходит автоматически при удалении DOM-узла — вручную `dispose()` вызывать почти никогда не нужно, кроме одноразовых эффектов вне DOM.
+Synchronous, no batching: `set()` immediately notifies everyone who read the signal
+inside an `effect`/`computed`. Inside `h()` bindings (below), effect disposal happens
+automatically when the DOM node is removed — you almost never call `dispose()` by hand,
+except for one-off effects that live outside the DOM.
 
-### `h()` — построение элементов
+### `h()` — building elements
 
 ```js
 h('div', { class: 'my-class' }, 'text', childNode, anotherSignal);
 ```
 
-- Проп `bind:value` / `bind:checked` — двусторонняя привязка сигнала к `<input>`/`<textarea>`/`<select>` (кроме `<select>`, см. `Select()` ниже).
-- Проп-сигнал (`class`, любой другой атрибут) — держится в актуальном состоянии сам.
-- Проп `on:click` и т.п. — обычный `addEventListener`.
-- Ребёнок-сигнал становится живым текстовым узлом.
-- `list(itemsSignal, keyFn, renderItem)` — реактивный keyed-список: при изменении `itemsSignal` переиспользует и переставляет существующие DOM-узлы по ключу, а не пересоздаёт всё — фокус/значение инпутов внутри элемента списка переживают добавление/удаление/реордер СОСЕДНИХ элементов.
-- `show(valueSignal, renderFn)` — реактивно подменяет один узел, когда `valueSignal` меняет значение (для условного «какая секция сейчас показана»).
+- `bind:value` / `bind:checked` prop — two-way binding between a signal and an
+  `<input>`/`<textarea>`/`<select>` (except `<select>`, see `Select()` below).
+- A signal prop (`class`, or any other attribute) stays live on its own.
+- `on:click` and friends — a plain `addEventListener`.
+- A signal child becomes a live text node.
+- `list(itemsSignal, keyFn, renderItem)` — a reactive keyed list: when `itemsSignal`
+  changes, it reuses and repositions existing DOM nodes by key instead of rebuilding
+  everything — focus/value inside a list item survives a NEIGHBORING item being
+  added/removed/reordered.
+- `show(valueSignal, renderFn)` — reactively swaps a single node when `valueSignal`
+  changes value (for "which section is currently shown"-style conditionals).
 
-### Готовые компоненты (`core/widgets.js`)
+### Ready-made components (`core/widgets.js`)
 
-`Field(label, control, { hint, stack })`, `TextInput(sig, opts)`, `TextArea(sig, opts)`, `Select(valueSig, optionsSig, shape)`, `SliderField(label, sig, { min, max, step })`, `Toggle(label, checkedSig, { hint, onChange })`, `Button(label, onClick, { variant: 'danger' })`, `Chip(content, { onRemove, onClick, title })`, `DraggableList(itemsSig, keyFn, { renderHeader, renderContent, isOpen, onToggleOpen, onReorder, className })`.
+`Field(label, control, { hint, stack })`, `TextInput(sig, opts)`, `TextArea(sig, opts)`,
+`Select(valueSig, optionsSig, shape)`, `SliderField(label, sig, { min, max, step })`,
+`Toggle(label, checkedSig, { hint, onChange })`, `Button(label, onClick, { variant: 'danger' })`,
+`Chip(content, { onRemove, onClick, title })`,
+`DraggableList(itemsSig, keyFn, { renderHeader, renderContent, isOpen, onToggleOpen, onReorder, className })`.
 
-`Toggle` — не чекбокс, а настоящий слайдер-переключатель; используйте его для любого on/off вместо `<input type="checkbox">`. По умолчанию двусторонне привязан к сигналу; передайте `onChange(nextChecked, inputEl)`, если переключение должно сначала пройти через что-то ещё (персист, асинхронный вызов, который может упасть и должен откатить визуальное состояние) — так делает переключатель **Enabled** у самого движка (см. `core/module-engine.js`).
+`Toggle` is a real switch, not a checkbox — use it for any on/off instead of
+`<input type="checkbox">`. It two-way binds to a signal by default; pass
+`onChange(nextChecked, inputEl)` if the switch needs to go through something else first
+(a persist call, an async action that can fail and needs to roll the visual state back)
+— that's exactly what the engine's own **Enabled** toggle does (see
+`core/module-engine.js`).
 
-`DraggableList` — тот же drag-and-drop-список карточек, что использует сам движок для списка модулей; `modules/tracker/index.js` использует его же для своих трекеров. Не пишите свой drag/drop — переиспользуйте этот.
+`DraggableList` is the same drag-and-drop card list the engine itself uses for the
+module list; `modules/tracker/index.js` uses it for its own trackers too. Don't write
+your own drag/drop — reuse this one.
 
-`Select` специально не построен на `list()`: `<select>` признаёт `<option>` только как своего прямого потомка, обёрточный `<div>` (даже `display:contents`) ломает список опций молча.
+`Select` is deliberately not built on `list()`: `<select>` only recognizes `<option>` as
+a direct child, and a wrapper `<div>` (even `display:contents`) silently breaks the
+option list.
 
-### Кросс-замыканий подписки внутри `render()`
+### Subscriptions from inside `render()`
 
-`render()` не получает cleanup-функцию (в отличие от `activate()`). Если внутри `render()` вы подписываетесь на что-то внешнее (`host.data.subscribe`, `host.onChatChanged`), привяжите отписку к жизни контейнера через `onDispose(container, unsubscribe)` — иначе подписка переживёт саму карточку и будет копиться при каждом повторном `render()` (после Retry/переключения).
+`render()` doesn't get a cleanup function (unlike `activate()`). If you subscribe to
+something external from inside `render()` (`host.data.subscribe`, `host.onChatChanged`),
+tie the unsubscribe to the container's lifetime with `onDispose(container, unsubscribe)`
+— otherwise the subscription outlives the card itself and piles up on every re-render
+(after a Retry or a chat switch).
 
-## ModuleEngine Developer — floating diagnostic panel
+## ModuleEngine Developer — the floating diagnostic panel
 
-Кнопка **⚙ ModuleEngine Developer** внизу drawer'а (под Base settings и Modules) открывает плавающее окно — список модулей с их состоянием (enabled/disabled/error), все зарезервированные каналы шины с флагами (`schema`/`open`/`{{macro}}`/`push`/`pull`/`persist`) и текущим значением, и последние записи лога движка. Это не модуль — не проходит через `activate()`/`render()`/`host`, не переключается в списке Modules, физически не вложен ни в один drawer (`document.body`, как HUD Tracker). Собирается движком напрямую из `core/dev-panel.js` через небольшой публичный срез самого `ModuleEngine`: `listModuleStates()`, `logs()`, `bus` (геттер на `ModuleDataBus`), `devPanelSettings()`.
+The **⚙ ModuleEngine Developer** button at the bottom of the drawer (below Base
+settings and Modules) opens a floating window: every module with its state
+(enabled/disabled/error), every reserved bus channel with its flags
+(`schema`/`open`/`{{macro}}`/`push`/`pull`/`persist`) and current value, and the
+engine's recent log. It isn't a module — it never goes through `activate()`/`render()`/
+`host`, it doesn't appear in the Modules list, and it isn't nested in any drawer at all
+(`document.body`, exactly like Tracker's HUD). The engine builds it directly, in
+`core/dev-panel.js`, off a small public slice of `ModuleEngine` itself:
+`listModuleStates()`, `logs()`, `bus` (a getter onto the `ModuleDataBus`),
+`devPanelSettings()`.
 
-Ничего добавлять в свой модуль для этого не нужно — как только канал зарезервирован через `host.data.reserve()`, он автоматически виден в этой панели.
+There's nothing to add to your own module for this — the moment a channel is reserved
+via `host.data.reserve()`, it's automatically visible in this panel.
+
+## Full-screen panel and the top-bar launcher
+
+Beyond the drawer, the engine also gives itself a real launcher icon in SillyTavern's
+own top bar — the same way third-party extensions like Character Library do (ST has no
+plugin API for registering a native tab; every extension that has one builds it as a
+self-managed overlay and inserts its own icon by hand). `index.js`'s
+`addTopBarLauncher()` inserts a `.drawer > .drawer-toggle.drawer-header > .drawer-icon`
+element — the exact markup ST's own icons use — right after `#rightNavHolder` (falling
+back to `#top-settings-holder`, then appending inside `#top-bar` as a last resort).
+Clicking it toggles `core/full-screen-panel.js`'s overlay, a full-viewport panel with an
+optional "hide ST's own top bar while open" setting.
+
+The full-screen panel does **not** reparent the drawer's already-mounted DOM into
+itself — `autoDispose()`'s `MutationObserver` (`core/dom.js`) would see that as a
+removal from the drawer and tear down every live effect/subscription in it. Instead,
+`ModuleEngine.mount()` is called a **second, independent time** on the panel's own
+skeleton, lazily, the first time it's opened. Both mounts read/write the same
+`engine.settings()`/`moduleSettings()`, so they stay in sync through shared state — the
+same way two browser tabs open to the same page would. `mount()` finds its containers
+via `[data-stme-base-list]`/`[data-stme-module-list]` attribute selectors, not `#id` —
+an `id` that's duplicated elsewhere in the document (as it now is, once for the drawer
+and once for the full-screen skeleton) makes `querySelector('#id')` unreliable even
+scoped to a subtree, confirmed both in jsdom and worth assuming true for real browsers
+too (a duplicate `id` is invalid HTML to begin with). A module never touches any of
+this directly — `mount()` running twice only matters if you're modifying the engine
+shell itself, not writing a module.
 
 ## Function tools
 
-Для native function calling используйте определение ST и регистрируйте его только в `activate()`:
+For native function calling, use ST's own definition shape and only register it from
+`activate()`:
 
 ```js
 host.registerTool({
   name: 'Example_Action',
   displayName: 'Example action',
-  description: 'Описание для модели.',
+  description: 'Description for the model.',
   parameters: { type: 'object', properties: {} },
   action: async args => 'Done.',
 });
@@ -425,27 +754,56 @@ host.registerTool({
 return () => host.unregisterTool('Example_Action');
 ```
 
-Notebook — эталонный пример: он регистрирует tool, хранит заметки в `chatMetadata`, инъецирует private prompt и очищает integration при отключении.
+Notebook is the reference example: it registers a tool, stores notes in `chatMetadata`,
+injects a private prompt, and cleans up the whole integration on disable.
 
-## RP Time как пример фонового модуля
+## RP Time as an example of a background module
 
-RP Time запускает SideCar-запрос на `GENERATION_STARTED`, а результат применяет после `MESSAGE_RECEIVED`. Это позволяет запросу выполняться параллельно с основной генерацией. Модуль хранит результат в `message.extra`, поэтому сам текст ответа модели не переписывается. Бейдж времени добавляется DOM-кодом после рендера сообщения.
+RP Time fires a SideCar request on `GENERATION_STARTED` and applies the result after
+`MESSAGE_RECEIVED`. This lets the request run in parallel with the main generation. The
+module stores its result in `message.extra`, so the model's actual reply text is never
+rewritten. The time badge is appended by plain DOM code after the message renders.
 
-## Рекомендации
+## Lorebook Scan as an example of a read-only external-data provider
 
-- Не импортируйте внутренние ST-файлы по относительным путям из модуля.
-- Не оборачивайте imports в `try/catch`.
-- Всегда возвращайте cleanup из `activate()` при наличии ресурсов или подписок.
-- Не используйте глобальные переменные для обмена между модулями: используйте `host.data`.
-- Не сохраняйте секреты в module settings или data bus.
-- Проверяйте отсутствие SideCar-конфигурации через `host.sidecar.isConfigured()`.
-- Не пытайтесь переписывать основной ответ нейросетью для небольших дополнений: сохраняйте данные и добавляйте UI/DOM-кодом, как RP Time.
-- Стройте `render()` через `core/widgets.js` (сигналы + `h()`), а не через `innerHTML`/`querySelector` — `render()` вызывается один раз, и только сигналы дают вам обновление UI после этого.
-- Подписки внутри `render()` (`host.data.subscribe`, `host.onChatChanged`) всегда оборачивайте в `onDispose(container, ...)`.
+`modules/lorebook/index.js` reads whichever World Info book is bound to the current
+chat/character (`context.chatMetadata.world_info` + `character.data.extensions.world`,
+via ST's own `context.loadWorldInfo()`) and republishes it on the bus as **metadata
+only** — `uid`, `book`, `name`, `keys`, `length`, `disabled`, `constant` — deliberately
+never `content`, so the bus index never carries a lorebook's full text weight. It then
+layers `host.services.register('lorebook', { find(filter), get(uid) })` on top:
+`find({ name, minLength, maxLength, key, disabled, constant })` filters the metadata
+index (every field optional), and `get(uid)` returns one entry's full record —
+`content` included — only when something actually needs the text. This is the pattern
+to follow for "read something from ST, republish a light index, offer a richer query on
+top" — the module itself never writes anything back into the source of truth (the
+lorebook file), it only observes and re-scans on `host.onChatChanged`.
 
-## CSS модуля без изменения общего `style.css`
+## Recommendations
 
-Модуль может экспортировать строковое поле `css`. При `engine.register(module)` движок автоматически создаёт отдельный `<style data-stme-module="module-id">` в `document.head`. Поэтому для нового модуля не нужно редактировать общий `style.css`:
+- Don't import ST's internal files by relative path from a module.
+- Don't wrap imports in try/catch.
+- Always return a cleanup function from `activate()` when you hold resources or
+  subscriptions.
+- Don't use global variables to exchange data between modules — use `host.data`.
+- Never store secrets in module settings or on the data bus.
+- Check for missing SideCar configuration via `host.sidecar.isConfigured()`.
+- Don't try to rewrite the model's main reply for a small addition — persist data and
+  add UI/DOM the way RP Time does.
+- Build `render()` through `core/widgets.js` (signals + `h()`), not
+  `innerHTML`/`querySelector` — `render()` runs once, and only signals give you an
+  updated UI after that.
+- Always wrap subscriptions made inside `render()` (`host.data.subscribe`,
+  `host.onChatChanged`) in `onDispose(container, ...)`.
+- If your module's own set of bus channels can shrink while it stays enabled (a
+  removable field, a deletable entry), `unreserve()` what's gone — see
+  [Pattern: reconciling a dynamic set of channels](#pattern-reconciling-a-dynamic-set-of-channels).
+
+## Module CSS without touching the shared `style.css`
+
+A module can export a string field, `css`. When `engine.register(module)` runs, the
+engine automatically creates a dedicated `<style data-stme-module="module-id">` in
+`document.head`. So a new module never needs to edit the shared `style.css`:
 
 ```js
 export const exampleModule = {
@@ -459,4 +817,5 @@ export const exampleModule = {
 };
 ```
 
-Используйте префикс класса модуля (`stme-example-*`), чтобы не затронуть интерфейс ST и другие модули.
+Prefix your classes with your module's name (`stme-example-*`) so you never collide
+with ST's own UI or another module's.
