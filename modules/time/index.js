@@ -157,10 +157,26 @@ export const timeModule = {
         const received = host.onEvent('MESSAGE_RECEIVED', async (messageId, type) => {
             log(`MESSAGE_RECEIVED (messageId=${messageId}, type=${type}).`);
             if (running) { log('Ignored — already processing a previous MESSAGE_RECEIVED.'); return; }
-            if (['swipe', 'continue', 'appendFinal', 'first_message', 'command', 'extension', 'regenerate'].includes(type)) { log(`Ignored — message type "${type}" is excluded.`); return; }
-            const context = host.context(); const settings = host.moduleSettings(TIME_DEFAULTS); const resolved = resolveMessage(context.chat ?? [], messageId); const request = pending; pending = null;
+            // Always drop whatever was pending once a MESSAGE_RECEIVED fires — even for
+            // an excluded type — so it can never leak into a LATER, unrelated
+            // generation (the next GENERATION_STARTED would otherwise see `pending`
+            // still set and skip sending a fresh request, silently breaking tracking).
+            const request = pending; pending = null;
+            // 'regenerate'/'swipe' are deliberately NOT excluded here — both are a real
+            // reroll (a genuinely new response) and must still trigger a fresh time
+            // update; excluding them used to silently swallow every reroll's result.
+            if (['continue', 'appendFinal', 'first_message', 'command', 'extension'].includes(type)) { log(`Ignored — message type "${type}" is excluded.`); return; }
+            const context = host.context(); const settings = host.moduleSettings(TIME_DEFAULTS); const resolved = resolveMessage(context.chat ?? [], messageId);
             if (!resolved?.message) { warn(`Ignored — could not resolve a chat message for id ${messageId}.`); return; }
             if (resolved.message.is_user || resolved.message.is_system) { log('Ignored — message is from the user or is a system message.'); return; }
+            // A reroll reuses the SAME message object — ST doesn't reliably clear its
+            // .extra for us. Without this, the guard right below would see the PREVIOUS
+            // response's time label and skip recomputing for the new one entirely.
+            if ((type === 'regenerate' || type === 'swipe') && resolved.message.extra?.[TIME_EXTRA_KEY]) {
+                log(`Message #${resolved.index} was rerolled (type="${type}") — clearing its stale time label so it recomputes.`);
+                delete resolved.message.extra[TIME_EXTRA_KEY];
+                delete resolved.message.extra.stme_rp_time_data;
+            }
             if (resolved.message.extra?.[TIME_EXTRA_KEY]) { log('Ignored — this message already has a time label.'); return; }
             if (!request) { warn('Ignored — no pending SideCar request (GENERATION_STARTED never fired, or SideCar was not configured at that point).'); return; }
             running = true;

@@ -11,7 +11,13 @@ const MAX_FIELD_LENGTH = 200;
 const MAX_FIELD_NAME_LENGTH = 40;
 const MAX_INSTRUCTION_LENGTH = 200;
 
-const IGNORED_MESSAGE_TYPES = ['swipe', 'continue', 'appendFinal', 'first_message', 'command', 'extension', 'regenerate'];
+// 'regenerate' and 'swipe' are deliberately NOT here — both are real generations of a
+// genuinely new response (ST's own reroll mechanics) and must still trigger a fresh
+// tracker update; excluding them used to silently swallow every reroll's result (see
+// the message.extra-clearing step in the MESSAGE_RECEIVED handler below for the other
+// half of that fix — the reused message object's stale snapshot also had to be
+// cleared, or the "already has a snapshot" guard would have skipped it anyway).
+const IGNORED_MESSAGE_TYPES = ['continue', 'appendFinal', 'first_message', 'command', 'extension'];
 
 const DEFAULT_SYSTEM_PROMPT =
     'You are a state tracker for a roleplay chat. Track only the fields below, using each note to decide how to fill it in:\n' +
@@ -712,15 +718,29 @@ export const trackerModule = {
         const received = host.onEvent('MESSAGE_RECEIVED', async (messageId, type) => {
             log(`MESSAGE_RECEIVED (messageId=${messageId}, type=${type}), ${pending.size} pending request(s).`);
             if (!pending.size) { log('Ignored — no pending SideCar requests.'); return; }
+            // Always drop whatever was pending once a MESSAGE_RECEIVED fires for it —
+            // even for an excluded type. Leaving it in place used to mean the NEXT real
+            // generation's GENERATION_STARTED would see pending.has(block.id) still true
+            // and skip sending a fresh request for that block, silently breaking
+            // tracking until something eventually consumed the stale entry.
+            const requests = [...pending.entries()];
+            pending.clear();
             if (IGNORED_MESSAGE_TYPES.includes(type)) { log(`Ignored — message type "${type}" is excluded.`); return; }
 
             const context = host.context();
             const resolved = resolveMessage(context.chat ?? [], messageId);
-            const requests = [...pending.entries()];
-            pending.clear();
 
             if (!resolved?.message) { warn(`Could not resolve a chat message for id ${messageId} — pending requests dropped.`); return; }
             if (resolved.message.is_user || resolved.message.is_system) { log('Ignored — message is from the user or is a system message.'); return; }
+
+            // A reroll (regenerate, or swiping to a brand-new response) reuses the SAME
+            // message object — ST doesn't reliably clear its .extra for us. Without this,
+            // the per-block "already has a snapshot" guard below would see the PREVIOUS
+            // response's snapshot and skip recomputing for the new one entirely.
+            if ((type === 'regenerate' || type === 'swipe') && resolved.message.extra?.[TRACKER_EXTRA_KEY]) {
+                log(`Message #${resolved.index} was rerolled (type="${type}") — clearing its stale snapshot so every block recomputes.`);
+                delete resolved.message.extra[TRACKER_EXTRA_KEY];
+            }
 
             const settings = host.moduleSettings(MODULE_DEFAULTS);
             let changed = false;
