@@ -53,6 +53,9 @@ export const timeModule = {
     id: 'time', title: 'RP Time', description: 'Runs SideCar in parallel with generation and appends the inferred in-world time.',
     about: 'Keeps an in-story clock (day, time, morning/evening) that moves forward on its own as the story goes on, and shows it under each message — like a subtitle telling you what time it is in the scene.',
     defaultEnabled: false,
+    version: '1.0.0',
+    repo: 'https://github.com/IAmiGOI/ST/tree/main/modules/time',
+    minEngineVersion: '0.1.0',
     activate(host) {
         const log = (...args) => console.info('[STME:time]', ...args);
         const warn = (...args) => console.warn('[STME:time]', ...args);

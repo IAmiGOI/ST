@@ -500,6 +500,9 @@ export const trackerModule = {
     description: 'Independent tracker blocks, each with its own SideCar profile, prompt, and fields.',
     about: 'Watches the story and keeps a running scoreboard of things you define — health, mood, relationship points, anything with a value that changes over time — and shows the current numbers next to each message.',
     defaultEnabled: false,
+    version: '1.0.0',
+    repo: 'https://github.com/IAmiGOI/ST/tree/main/modules/tracker',
+    minEngineVersion: '0.1.0',
 
     activate(host) {
         const log = (...args) => console.info('[STME:tracker]', ...args);

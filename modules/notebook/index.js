@@ -11,6 +11,9 @@ export const notebookModule = {
     description: 'Private per-chat working memory exposed as a native function tool.',
     about: 'A private notebook the AI can write in and read back during the story — like sticky notes only it can see, used to remember things (plans, secrets, character goals) that shouldn\'t appear in the actual conversation text.',
     defaultEnabled: true,
+    version: '1.0.0',
+    repo: 'https://github.com/IAmiGOI/ST/tree/main/modules/notebook',
+    minEngineVersion: '0.1.0',
 
     activate(host) {
         const store = createNotebookStore(host.context);

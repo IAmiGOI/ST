@@ -1,11 +1,22 @@
 import { ModuleEngine } from './core/module-engine.js';
 import { createFullScreenPanel } from './core/full-screen-panel.js';
+import { createModuleBrowserPanel, renderBrowserTab } from './core/module-browser.js';
 import { LorebookService } from './core/lorebook-service.js';
+import { checkCoreUpdate, applyCoreUpdate, deriveExtensionName } from './core/self-update.js';
 import { effect } from './core/reactive.js';
 import { notebookModule } from './modules/notebook/index.js';
 import { timeModule } from './modules/time/index.js';
 import { trackerModule } from './modules/tracker/index.js';
 import { musicModule } from './modules/music/index.js';
+
+// See core/self-update.js — needs this exact script's own URL, which only index.js
+// (the real entry point ST imports) can supply via import.meta.url.
+const EXTENSION_NAME = deriveExtensionName(import.meta.url);
+// Guards against a reload loop: an automatic update attempt only ever runs once per
+// browser session (tab), no matter how many times init() itself runs afterward
+// (e.g. a manual page refresh). A failed attempt is communicated via the banner
+// below instead, with a manual Retry that bypasses this guard on purpose.
+const UPDATE_SESSION_FLAG = 'stme_update_attempted';
 
 // The drawer lives in JavaScript so the extension works regardless of its
 // installation folder name and never depends on a fetched template file.
@@ -20,6 +31,7 @@ const SETTINGS_HTML = `
             <p class="stme-intro">Independent modules managed from one place.</p>
             <section class="stme-section"><h4>Base settings</h4><div data-stme-base-list class="stme-base-list"></div></section>
             <section class="stme-section"><h4>Modules <small>Drag cards to reorder them.</small></h4><div data-stme-module-list class="stme-module-list"></div></section>
+            <section class="stme-section" data-stme-browser-tab></section>
         </div>
     </div>
 </div>`;
@@ -27,6 +39,65 @@ const SETTINGS_HTML = `
 function getContext() {
     if (!window.SillyTavern?.getContext) throw new Error('SillyTavern context API is unavailable.');
     return window.SillyTavern.getContext();
+}
+
+function renderBlockingOverlay() {
+    const overlay = document.createElement('div');
+    overlay.className = 'stme-update-blocking';
+    overlay.innerHTML = `
+        <div class="stme-update-blocking-box">
+            <div class="stme-update-blocking-spinner"></div>
+            <strong>ST Module Engine is updating…</strong>
+            <p>A newer version was found. The page will reload automatically once it's applied.</p>
+        </div>`;
+    document.body.append(overlay);
+    return overlay;
+}
+
+function renderUpdateBanner() {
+    if (document.querySelector('.stme-update-banner')) return;
+    const banner = document.createElement('div');
+    banner.className = 'stme-update-banner';
+    banner.innerHTML = `<span>⚠ ST Module Engine couldn't update itself automatically — it's still running the current version.</span>`;
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'menu_button';
+    retry.textContent = 'Retry';
+    retry.addEventListener('click', async () => {
+        retry.disabled = true;
+        try { await attemptCoreUpdate(); }
+        finally { retry.disabled = false; }
+    });
+    banner.append(retry);
+    document.body.prepend(banner);
+}
+
+function removeUpdateBanner() {
+    document.querySelector('.stme-update-banner')?.remove();
+}
+
+/**
+ * Checks whether a newer core version is available and, if so, blocks the page
+ * (a full-viewport overlay, not just the extension's own panel — the ask was to
+ * block *access*, not just this one drawer) while applying it and reloading.
+ * Silent — no overlay, no banner — for anything short of "a newer version exists
+ * and we tried to apply it": a non-git install, a failed network check, or already
+ * up to date all fall through here without a trace. Only an actual FAILED apply
+ * (update existed, git pull didn't succeed) shows the yellow banner.
+ */
+async function attemptCoreUpdate() {
+    if (!EXTENSION_NAME) return;
+    const context = getContext();
+    const status = await checkCoreUpdate(context, EXTENSION_NAME);
+    if (!status.checked) return;
+    if (status.upToDate) { removeUpdateBanner(); return; }
+
+    sessionStorage.setItem(UPDATE_SESSION_FLAG, '1');
+    const overlay = renderBlockingOverlay();
+    const result = await applyCoreUpdate(context, EXTENSION_NAME);
+    if (result.applied) { window.location.reload(); return; }
+    overlay.remove();
+    renderUpdateBanner();
 }
 
 async function init() {
@@ -45,6 +116,12 @@ async function init() {
     const fullScreenPanel = createFullScreenPanel(engine);
     addTopBarLauncher(fullScreenPanel);
 
+    // A single overlay instance, opened from the "Browser" tab right after the
+    // Modules section (see SETTINGS_HTML above) — reuses the same full-viewport
+    // panel mechanism as fullScreenPanel above (core/module-browser.js).
+    const browserPanel = createModuleBrowserPanel(engine);
+    document.querySelector('[data-stme-browser-tab]')?.append(renderBrowserTab(browserPanel));
+
     // Independent of ModuleEngine on purpose — see MODULES.md's "Independent core
     // services" section. Talks to the rest of the system only through the shared bus
     // (engine.bus); other code reaches it via host.data.read('lorebook', 'api').
@@ -53,6 +130,7 @@ async function init() {
 
     window.STModuleEngine = engine;
     window.STModuleEngineLorebook = lorebook;
+    window.STModuleEngineBrowser = browserPanel;
     console.info('[ST Module Engine] Started with Notebook, RP Time, Tracker and Music modules, plus the independent Lorebook service.');
 }
 
@@ -85,6 +163,11 @@ function addTopBarLauncher(panel) {
 }
 
 jQuery(async () => {
-    try { await init(); }
+    try {
+        // Runs before anything else boots — a page reload triggered by a successful
+        // update means init() below never has to deal with half-loaded state.
+        if (!sessionStorage.getItem(UPDATE_SESSION_FLAG)) await attemptCoreUpdate();
+        await init();
+    }
     catch (error) { console.error('[ST Module Engine] Failed to start:', error); }
 });

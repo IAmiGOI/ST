@@ -4,6 +4,8 @@ import { h, show, signal, computed, effectOn, Button, TextInput, Toggle, Draggab
 import { createDevPanel } from './dev-panel.js';
 import { resolveModuleUrl } from './module-loader.js';
 
+const stopPropagation = event => event.stopPropagation();
+
 const SETTINGS_KEY = 'st_module_engine';
 // A module's onChatChanged listener that (directly or via some ST API it calls)
 // causes CHAT_CHANGED to fire again before it's done handling the first one is a
@@ -14,6 +16,28 @@ const SETTINGS_KEY = 'st_module_engine';
 // just the one that happened to trigger it:
 const CHAT_CHANGED_BURST_WINDOW_MS = 2000;
 const CHAT_CHANGED_BURST_LIMIT = 8;
+
+// Bumped by hand alongside manifest.json's own "version" field — no build step
+// derives one from the other, same single-source-by-discipline approach used
+// elsewhere in this codebase. A module declares `minEngineVersion` to be checked
+// against this at enable() time (see compareVersions() below and #renderModuleHeader).
+export const ENGINE_VERSION = '0.1.0';
+
+/**
+ * Plain dotted-numeric comparison (`"1.2.0"` vs `"1.10.0"`), no semver ranges or
+ * pre-release tags — this is an internal compatibility gate between this engine
+ * and modules built for it, not a package registry. Missing/non-numeric parts
+ * count as 0. Returns -1/0/1 like a normal comparator.
+ */
+export function compareVersions(a, b) {
+    const partsOf = value => String(value ?? '0').split('.').map(part => parseInt(part, 10) || 0);
+    const pa = partsOf(a); const pb = partsOf(b);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+        if (diff !== 0) return diff > 0 ? 1 : -1;
+    }
+    return 0;
+}
 
 /**
  * Lifecycle host for feature modules. A module only knows the small host API
@@ -47,6 +71,10 @@ export class ModuleEngine {
     #layoutVersion = signal(0);
     #enabledMap = signal({});
     #errorMap = signal({});
+    // id -> { remoteVersion, newer } — populated by checkModuleUpdateAvailable(),
+    // consulted by #renderModuleHeader() to show an "Update available" affordance.
+    // Only ever set for externally-loaded modules (settings().modules[id].sourceUrl).
+    #moduleUpdateInfo = signal({});
     #forceTicks = new Map();
     #orderedSignal;
 
@@ -184,6 +212,18 @@ export class ModuleEngine {
         const module = this.#modules.get(id);
         if (!module) throw new Error(`Unknown module: ${id}`);
 
+        // Compatibility gate: checked here, not thrown from register() — a module
+        // that's too new for this engine must not take down every module registered
+        // after it in the same init() (see MODULES.md's per-module error isolation).
+        // activate() is never called; the error card (existing UI) explains why.
+        if (module.minEngineVersion && compareVersions(module.minEngineVersion, ENGINE_VERSION) > 0) {
+            const error = new Error(`"${module.title}" requires ST Module Engine v${module.minEngineVersion} or later (this is v${ENGINE_VERSION}).`);
+            this.#errorMap.update(map => ({ ...map, [id]: error }));
+            this.#enabledMap.update(map => ({ ...map, [id]: true }));
+            this.#log('error', id, error.message);
+            return;
+        }
+
         try {
             const cleanup = await module.activate(this.#hostFor(module));
             this.#active.set(id, typeof cleanup === 'function' ? cleanup : () => {});
@@ -216,6 +256,25 @@ export class ModuleEngine {
         this.settings().modules[id] = { ...this.settings().modules[id], enabled };
         this.saveSettings();
         if (enabled) await this.enable(id); else await this.disable(id);
+    }
+
+    /**
+     * Fully removes a registered module (disabling it first if active) — unlike
+     * disable(), the module stops existing at all: gone from every registry, its
+     * injected <style> revoked. Needed to swap a module's code in place for an
+     * update (see applyModuleUpdate()); not used for anything else today.
+     */
+    async unregister(id) {
+        if (!this.#modules.has(id)) return;
+        if (this.#active.has(id)) await this.disable(id);
+        this.#modules.delete(id);
+        this.#registeredIds.update(ids => ids.filter(existing => existing !== id));
+        const style = this.#moduleStyles.get(id);
+        if (style) { style.remove(); this.#moduleStyles.delete(id); }
+        this.#forceTicks.delete(id);
+        this.#enabledMap.update(map => { if (!(id in map)) return map; const next = { ...map }; delete next[id]; return next; });
+        this.#errorMap.update(map => { if (!(id in map)) return map; const next = { ...map }; delete next[id]; return next; });
+        this.#moduleUpdateInfo.update(map => { if (!(id in map)) return map; const next = { ...map }; delete next[id]; return next; });
     }
 
     layout() {
@@ -314,8 +373,28 @@ export class ModuleEngine {
 
     #renderModuleHeader(module) {
         const enabledDisplay = computed(() => this.#enabledMap()[module.id] ?? false);
+        const updateInfo = computed(() => this.#moduleUpdateInfo()[module.id]);
+        const titleLine = [module.title, module.about ? InfoDot(module.about) : null];
+        if (module.version) titleLine.push(h('span', { class: 'stme-module-version' }, `v${module.version}`));
+        if (module.repo) {
+            titleLine.push(h('a', {
+                class: 'stme-module-repo-link', href: module.repo, target: '_blank', rel: 'noopener noreferrer',
+                title: 'View source', 'on:click': stopPropagation,
+            }, '↗'));
+        }
         return [
-            h('div', {}, h('strong', {}, module.title, module.about ? InfoDot(module.about) : null), h('small', {}, module.description ?? '')),
+            h('div', {}, h('strong', {}, ...titleLine), h('small', {}, module.description ?? '')),
+            show(computed(() => Boolean(updateInfo()?.newer)), hasUpdate => hasUpdate ? Button('Update available', async event => {
+                event.stopPropagation();
+                const button = event.currentTarget;
+                button.disabled = true;
+                try {
+                    await this.applyModuleUpdate(module.id);
+                    this.#toast('success', `${module.title} updated to v${this.#modules.get(module.id)?.version ?? '?'}.`, 'ST Module Engine');
+                } catch (error) {
+                    this.#toast('error', error?.message || String(error), module.title);
+                } finally { button.disabled = false; }
+            }) : null),
             Toggle('Enabled', enabledDisplay, {
                 onChange: async (checked, input) => {
                     input.disabled = true;
@@ -373,18 +452,96 @@ export class ModuleEngine {
         this.enable(module.id);
     }
 
+    /**
+     * Public entry point for loading a module from a URL programmatically — the
+     * same mechanism the Module Loader card's "Load module" button uses (and the
+     * one a future community-catalog browser will call per entry: `engine.installModule(entry.url)`),
+     * just without needing a DOM text field + button click in between. Throws the
+     * same errors #loadRemoteModule always has (download failure, an id collision
+     * with an already-registered module) — a caller decides how to surface those.
+     */
+    async installModule(url) {
+        return this.#loadRemoteModule(url);
+    }
+
     async #loadRemoteModule(url) {
         const resolved = await resolveModuleUrl(url);
         const response = await fetch(resolved);
         if (!response.ok) throw new Error(`Module download failed: HTTP ${response.status}`);
         const source = await response.text();
         const blob = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
-        try { const imported = await import(blob); const module = imported.default ?? imported.module; this.register(module); await this.enable(module.id); } finally { URL.revokeObjectURL(blob); }
+        try {
+            const imported = await import(blob);
+            const module = imported.default ?? imported.module;
+            this.register(module);
+            // Remembered so a later session (or the "Check for updates" affordance
+            // below) can re-resolve the same pasted URL — the exact string the user
+            // typed, not the resolved raw-file URL, so a bare repo/tree link keeps
+            // re-resolving its default branch/entry file fresh each time.
+            const entry = this.settings().modules[module.id] ??= {};
+            entry.sourceUrl = url;
+            this.saveSettings();
+            await this.enable(module.id);
+        } finally { URL.revokeObjectURL(blob); }
+    }
+
+    /**
+     * Only meaningful for a module loaded via the Module Loader (has a persisted
+     * sourceUrl) — built-in modules ship with this repo's own git checkout and have
+     * nothing separate to "check" (see MODULES.md). Re-fetches the same source and
+     * reads its declared `version` field via a plain regex, WITHOUT importing/
+     * executing it again — checking for an update shouldn't run a second copy of a
+     * module's top-level code next to the one already active. Returns null if there's
+     * no sourceUrl, the fetch fails, or no version field is found (nothing to compare).
+     */
+    async checkModuleUpdateAvailable(id) {
+        const module = this.#modules.get(id);
+        const sourceUrl = this.settings().modules[id]?.sourceUrl;
+        if (!module || !sourceUrl) return null;
+        try {
+            const resolved = await resolveModuleUrl(sourceUrl);
+            const response = await fetch(resolved);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const source = await response.text();
+            const match = source.match(/version\s*:\s*['"]([^'"]+)['"]/);
+            const remoteVersion = match?.[1];
+            if (!remoteVersion) return null;
+            const newer = compareVersions(remoteVersion, module.version ?? '0') > 0;
+            const info = { remoteVersion, currentVersion: module.version ?? null, newer };
+            this.#moduleUpdateInfo.update(map => ({ ...map, [id]: info }));
+            return info;
+        } catch (error) {
+            this.#log('error', id, `Update check failed: ${error?.message || String(error)}`, error);
+            return null;
+        }
+    }
+
+    /** Checks every externally-loaded module (one with a persisted sourceUrl) for an update, in parallel. Used by the Module Loader's "Check for updates" button. */
+    async checkAllModuleUpdates() {
+        const ids = [...this.#modules.keys()].filter(id => this.settings().modules[id]?.sourceUrl);
+        await Promise.all(ids.map(id => this.checkModuleUpdateAvailable(id)));
+        return ids.length;
+    }
+
+    /**
+     * Hot-swaps a module's code in place from its already-persisted sourceUrl:
+     * unregister() the old copy, then re-run the exact same load sequence
+     * #loadRemoteModule() uses for a brand-new module. No page reload needed — each
+     * fetch produces a fresh Blob/object URL, so re-import()-ing genuinely loads
+     * fresh code, unlike a normal (cached) ES module URL.
+     */
+    async applyModuleUpdate(id) {
+        const sourceUrl = this.settings().modules[id]?.sourceUrl;
+        if (!sourceUrl) throw new Error(`No known source URL for module "${id}" — it wasn't loaded via the Module Loader.`);
+        await this.unregister(id);
+        await this.#loadRemoteModule(sourceUrl);
+        this.#moduleUpdateInfo.update(map => { if (!(id in map)) return map; const next = { ...map }; delete next[id]; return next; });
     }
 
     #renderModuleLoader() {
         const url = signal('');
         const busy = signal(false);
+        const checking = signal(false);
         const card = h('details', { class: 'stme-base-card' });
         const header = h('summary', { class: 'stme-module-header' },
             h('div', {}, h('strong', {}, 'Module loader', InfoDot('Lets you add a new tool to this extension by pasting a link, instead of installing and managing a whole separate extension for every single feature.')), h('small', {}, 'Load a self-contained module from a GitHub repo or a direct .js link.')));
@@ -400,8 +557,15 @@ export class ModuleEngine {
                     this.#toast('error', error?.message || String(error), 'Module loader');
                 } finally { busy.set(false); }
             }),
+            Button('Check for updates', async () => {
+                checking.set(true);
+                try {
+                    const count = await this.checkAllModuleUpdates();
+                    this.#toast('success', count ? `Checked ${count} loaded module(s).` : 'No externally-loaded modules to check.', 'ST Module Engine');
+                } finally { checking.set(false); }
+            }),
         );
-        effectOn(content, () => { content.querySelector('button').disabled = busy(); });
+        effectOn(content, () => { const buttons = content.querySelectorAll('button'); buttons[0].disabled = busy(); buttons[1].disabled = checking(); });
         card.append(header, content);
         return card;
     }

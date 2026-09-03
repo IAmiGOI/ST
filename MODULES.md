@@ -73,6 +73,18 @@ engine.register(exampleModule);
 `id` is the namespace for settings and the data bus. Don't change it after shipping —
 users may already have settings saved under it.
 
+Three more fields are optional but recommended — see [Versioning and
+auto-updates](#versioning-and-auto-updates) for what each one does:
+
+```js
+export const exampleModule = {
+  // ...the fields above...
+  version: '1.0.0',
+  repo: 'https://github.com/you/your-repo',   // or a /tree/<branch>/<path> pointing at this module's own folder
+  minEngineVersion: '0.1.0',                  // oldest ModuleEngine this module is known to work with
+};
+```
+
 ## Lifecycle
 
 ### `activate(host)`
@@ -821,6 +833,151 @@ every core-ish idea. `host.sidecar` staying inside `ModuleEngine` and `LorebookS
 living outside it are both deliberate, not inconsistent: SideCar is intrinsic to what
 the engine already does for every module (give it a model); Lorebook's future shape is
 explicitly meant to grow past what `ModuleEngine` is about.
+
+## Versioning and auto-updates
+
+Three separate mechanisms, covering three separate things that can go stale: the
+engine itself, a built-in module, and a module loaded from someone else's repo via
+the Module Loader.
+
+### Core self-update
+
+`index.js` calls `attemptCoreUpdate()` once per browser session (guarded by a
+`sessionStorage` flag, `stme_update_attempted`, so a failed attempt never turns into a
+reload loop), before anything else boots. It uses SillyTavern's own git-based
+extension-update endpoints — the same ones behind the "Update" button in ST's own
+Extensions manager — wrapped in `core/self-update.js`:
+
+- `checkCoreUpdate(context, extensionName)` → `POST /api/extensions/version`.
+- `applyCoreUpdate(context, extensionName)` → `POST /api/extensions/update` (a `git
+  pull`).
+
+`extensionName` isn't exposed by `getContext()` — `deriveExtensionName(import.meta.url)`
+pulls it from this exact script's own URL (the folder name in
+`.../extensions/third-party/<name>/index.js` or `.../extensions/<name>/index.js`).
+Both endpoints simply don't exist for a non-git install (manually copied files) —
+every function here degrades to "checked: false" / "applied: false" instead of
+throwing, so a non-git install boots exactly as if this code weren't here at all: no
+overlay, no banner, nothing logged beyond one `console.info`.
+
+If an update is found: a full-viewport blocking overlay (`.stme-update-blocking`, not
+scoped to this extension's own panel — the ask was to block *access*, not just one
+drawer) appears while the pull runs, then the page reloads on success. On failure the
+overlay is removed and a fixed, page-top yellow banner (`.stme-update-banner`) appears
+with a manual Retry button — Retry re-runs the same check-and-apply flow directly
+(bypassing the session flag on purpose, since that flag only guards the *automatic*
+attempt on load).
+
+### Built-in module version/repo metadata
+
+Every built-in module carries `version` and `repo` (see [Module
+contract](#module-contract)) purely for display — a small `vX.Y.Z` label plus a "view
+source" link next to the module's title in `#renderModuleHeader`
+(`core/module-engine.js`). A built-in module's code already updates for free whenever
+the core does (same git checkout, same `git pull`) — there's nothing separate to
+build for these; `repo` just needs to point at that module's own folder inside this
+repo (e.g. `.../tree/main/modules/notebook`), the same URL shape the Module Loader
+already understands for a module hosted anywhere else.
+
+### Engine/module compatibility: `ENGINE_VERSION` and `minEngineVersion`
+
+`core/module-engine.js` exports `ENGINE_VERSION` (bumped by hand, kept in sync with
+`manifest.json`'s own version by discipline — no build step derives one from the
+other) and `compareVersions(a, b)`, a plain dotted-numeric comparison (`"1.10.0" >
+"1.2.0"`) — no semver ranges or pre-release tags, since this is an internal
+compatibility gate, not a package registry.
+
+A module declares `minEngineVersion` to be checked against `ENGINE_VERSION`. The
+check happens in `enable()`, **not** thrown from `register()` — an incompatible
+module must not take down every module registered after it in the same `init()` (see
+[Error protection](#error-protection)). When incompatible, `activate()` is never
+called; the existing error-card UI shows "requires ST Module Engine vX.Y.Z or later"
+instead, same as any other start failure.
+
+### External module auto-update (Module Loader-loaded modules only)
+
+Only meaningful for a module loaded via the Module Loader from a *different* repo —
+that module isn't part of this extension's own git checkout, so core self-update
+never touches it. `#loadRemoteModule(url)` now persists `{ sourceUrl: url }` into that
+module's settings entry (the exact string pasted in, not the resolved raw-file URL,
+so a bare repo/tree link keeps re-resolving its branch/entry file fresh on every
+check).
+
+- `engine.checkModuleUpdateAvailable(id)` re-fetches that same `sourceUrl` and reads
+  its declared `version` field via a plain regex — deliberately **without**
+  importing/executing the source again, since checking for an update shouldn't run a
+  second copy of a module's top-level code next to the one already active. Compares
+  against the currently-registered module's own `version` via `compareVersions`.
+- `engine.checkAllModuleUpdates()` runs that for every module with a persisted
+  `sourceUrl`, in parallel — this is what the Module Loader card's "Check for
+  updates" button calls. It's on-demand, not automatic-on-load: core self-update is
+  the one place a network check happens unprompted (that was the explicit ask);
+  modules opt in via a click instead of firing N GitHub requests on every page load.
+- When a check finds a newer version, `#renderModuleHeader` reactively shows an
+  "Update available" button next to the Enabled toggle. Clicking it calls
+  `engine.applyModuleUpdate(id)`: `unregister(id)` (new — fully removes a module,
+  unlike `disable()`, including its injected `<style>`) followed by the exact same
+  load sequence `#loadRemoteModule()` already uses, from the same `sourceUrl`. No
+  page reload needed: each fetch produces a fresh `Blob`/object URL, so re-`import()`-ing
+  genuinely loads fresh code, unlike a normal (cached) ES module URL.
+
+## Community module catalog
+
+A single, hand-curated `catalog.json` lists community modules for discovery —
+separate from the [external module auto-update](#external-module-auto-update-module-loader-loaded-modules-only)
+mechanism above, which only concerns a module *already installed*. This is the
+"where do I find one" half.
+
+**Where it lives**: [`IAmiGOI/SillyTavernME-Modules`](https://github.com/IAmiGOI/SillyTavernME-Modules)
+— its own repository, deliberately separate from this engine's own repo and from
+any individual module's own repo/fork. `core/module-catalog.js`'s
+`DEFAULT_CATALOG_URL` points at its raw `catalog.json` on `main`.
+
+**Format** — a single JSON object with one array:
+
+```json
+{
+  "modules": [
+    {
+      "id": "dice-roller",
+      "title": "Dice Roller",
+      "url": "https://github.com/someone/ST-dice-roller/blob/main/index.js",
+      "description": "Rolls dice inline in chat.",
+      "author": "someone",
+      "version": "1.0.0",
+      "repo": "https://github.com/someone/ST-dice-roller"
+    }
+  ]
+}
+```
+
+Only `id`/`title`/`url` are required — `url` is whatever `installModule()`
+(below) would accept: a direct file link, a bare repo link, or a `/tree/<branch>`
+link, same as the Module Loader card's own text field.
+
+**How a module gets listed** (deliberately asymmetric, to keep a contributor's PR
+minimal): a contributor's PR touches only *their own module's code*, in their own
+repo or fork — never `catalog.json` itself. The maintainer reviews the module, then
+by hand adds the one corresponding entry to `catalog.json` when accepting it. This
+keeps the bar for contributing a module as low as "write the module, open a PR/link
+it somewhere," with all catalog curation staying centralized and reviewed.
+
+**The code here** (`core/module-catalog.js`) is intentionally backend-only, with no
+UI wired to it yet:
+
+- `parseCatalogEntry(raw)` — normalizes one entry, or returns `null` if `id`/
+  `title`/`url` is missing. Every other field is coerced to a string or `null`;
+  unknown extra fields are dropped, not passed through.
+- `fetchCatalog(url = DEFAULT_CATALOG_URL, { fetchImpl })` — fetches and parses the
+  whole catalog. A malformed individual entry is skipped with a console warning
+  (same per-item error isolation as everywhere else in this codebase); a network/
+  HTTP failure throws — unlike core self-update, there's no silent-skip case here,
+  since a caller asking to browse the catalog needs to know when that failed.
+- `ModuleEngine.installModule(url)` — the public entry point a future catalog
+  browser will call per entry (`engine.installModule(entry.url)`). It's the exact
+  same download-resolve-import-register-enable sequence the Module Loader card's
+  "Load module" button already uses (`#loadRemoteModule`, private) — just callable
+  without a DOM text field + button click in between.
 
 ## Recommendations
 

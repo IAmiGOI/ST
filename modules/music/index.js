@@ -161,6 +161,9 @@ export const musicModule = {
     description: 'Classifies the scene into keys, picks a matching track, and plays it in the background.',
     about: 'Picks and plays background music that matches the current scene on its own, based on mood/location words it recognizes — like a soundtrack that changes itself as the story moves.',
     defaultEnabled: false,
+    version: '1.0.0',
+    repo: 'https://github.com/IAmiGOI/ST/tree/main/modules/music',
+    minEngineVersion: '0.1.0',
 
     activate(host) {
         const settings = host.moduleSettings(MODULE_DEFAULTS);

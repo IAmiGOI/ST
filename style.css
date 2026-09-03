@@ -236,6 +236,73 @@
     .stme-settings .stme-module-list { grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); }
 }
 
+/* Part 2/4 of auto-updates: per-module version label + "view source" link next to a
+   module's title (core/module-engine.js #renderModuleHeader), and the "Update
+   available" button that appears next to the Enabled toggle for a module loaded via
+   the Module Loader when checkModuleUpdateAvailable() finds a newer version. */
+.stme-settings .stme-module-version { margin-left: 6px; opacity: .55; font-weight: normal; font-size: .78em; font-variant-numeric: tabular-nums; }
+.stme-settings .stme-module-repo-link { margin-left: 5px; opacity: .55; text-decoration: none; font-weight: normal; }
+.stme-settings .stme-module-repo-link:hover { opacity: 1; }
+.stme-settings .stme-module-header .menu_button { font-size: .8em; padding: 3px 8px; }
+
+/* Part 1 of auto-updates: full-viewport block while the core self-update is being
+   applied (index.js's attemptCoreUpdate()) — deliberately outside .stme-settings and
+   above everything else, since the point is blocking the whole page, not just this
+   extension's own panel. */
+.stme-update-blocking { position: fixed; inset: 0; z-index: 9000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .72); backdrop-filter: blur(2px); font-family: var(--mainFontFamily, inherit); color: var(--SmartThemeBodyColor, #eee); }
+.stme-update-blocking-box { display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: min(360px, calc(100vw - 40px)); padding: 24px 28px; border-radius: 14px; background: var(--SmartThemeBlurTintColor, #222); border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #555) 60%, var(--stme-accent, #8da8ff)); box-shadow: 0 20px 50px rgba(0, 0, 0, .5); text-align: center; }
+.stme-update-blocking-box p { margin: 0; opacity: .8; font-size: .9em; }
+.stme-update-blocking-spinner { width: 26px; height: 26px; border-radius: 50%; border: 3px solid color-mix(in srgb, var(--stme-accent, #8da8ff) 35%, transparent); border-top-color: var(--stme-accent, #8da8ff); animation: stme-update-spin .8s linear infinite; }
+@keyframes stme-update-spin { to { transform: rotate(360deg); } }
+
+/* Yellow warning banner shown when a core self-update was found but failed to
+   apply — fixed to the very top of the page (not nested inside the drawer, which
+   may be collapsed) so it stays visible regardless of what else is open. */
+.stme-update-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 8000; display: flex; align-items: center; justify-content: center; gap: 14px; padding: 8px 16px; background: #dba617; color: #241a00; font-family: var(--mainFontFamily, inherit); font-size: .9em; box-shadow: 0 3px 10px rgba(0, 0, 0, .3); }
+.stme-update-banner .menu_button { background: #241a00; color: #ffe9a8; border: none; }
+.stme-update-banner .menu_button:hover { filter: brightness(1.2); }
+
+/* "Browser" tab (core/module-browser.js) — a full-width clickable bar right after the
+   Modules section, not another <details> card (it opens an overlay, nothing collapses
+   in place), so it gets its own distinct treatment rather than reusing .stme-module-header. */
+.stme-settings .stme-browser-tab { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; margin: 0; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 65%, var(--stme-accent)); border-radius: var(--stme-radius-card); background: linear-gradient(105deg, var(--SmartThemeBlurTintColor), var(--stme-panel)); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color .18s ease, box-shadow .18s ease; }
+.stme-settings .stme-browser-tab:hover { border-color: var(--stme-accent); box-shadow: 0 5px 19px rgba(0, 0, 0, .2); }
+.stme-settings .stme-browser-tab strong { color: var(--stme-accent); }
+.stme-settings .stme-browser-tab small { opacity: .7; }
+
+/* The Module Browser overlay reuses .stme-fullscreen's own positioning/chrome
+   (core/full-screen-panel.js) — stme-browser-overlay only bumps stacking so it always
+   lands above the full-screen panel if that happens to be open underneath it too. */
+.stme-browser-overlay { z-index: 6500; }
+.stme-browser-body { display: flex; flex-direction: column; gap: 14px; }
+.stme-browser-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.stme-browser-toolbar input[type="search"] { flex: 1; min-width: 160px; }
+.stme-browser-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.stme-browser-filter-chip { padding: 3px 10px; border: 1px dashed color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent); border-radius: 999px; opacity: .55; font-size: .82em; cursor: not-allowed; }
+.stme-browser-empty { margin: 30px 0; opacity: .7; text-align: center; }
+.stme-browser-error { color: var(--SmartThemeQuoteColor, #e88); }
+.stme-browser-error .menu_button { margin-top: 8px; }
+.stme-browser-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+@container (min-width: 640px) { .stme-browser-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); } }
+.stme-browser-card { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-card); background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, transparent); min-width: 0; }
+/* Installed cards read as "already yours" — dimmed border instead of the normal
+   hover-reactive accent border, and no Install button competing for attention. */
+.stme-browser-card-installed { border-color: color-mix(in srgb, #4caf7d 45%, var(--SmartThemeBorderColor)); background: color-mix(in srgb, #4caf7d 8%, var(--SmartThemeBlurTintColor)); }
+.stme-browser-card-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.stme-browser-card-author { opacity: .6; font-size: .8em; }
+.stme-browser-card-desc { margin: 0; opacity: .85; font-size: .9em; line-height: 1.4; }
+.stme-browser-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.stme-browser-tag { padding: 2px 8px; border-radius: 999px; background: rgba(255, 255, 255, .08); font-size: .78em; opacity: .85; }
+.stme-browser-card-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: .8em; }
+.stme-browser-compat-ok { color: #8fd6ab; }
+.stme-browser-compat-bad { color: #f2b4b4; }
+.stme-browser-updated { opacity: .6; }
+/* Rating stub — no rating system exists yet, this only marks where one will go. */
+.stme-browser-rating { display: flex; align-items: center; gap: 6px; opacity: .45; font-size: .85em; cursor: default; }
+.stme-browser-rating small { opacity: .85; }
+.stme-browser-card > button.menu_button { align-self: flex-start; }
+.stme-browser-installed-badge { align-self: flex-start; padding: 3px 10px; border-radius: 999px; background: color-mix(in srgb, #4caf7d 30%, transparent); color: #bdf5d6; font-size: .85em; font-weight: 600; }
+
 /* Top-bar launcher icon (core/full-screen-panel.js's caller in index.js) — mirrors
    ST's own .drawer-icon so it's visually indistinguishable from a native icon. */
 .stme-launcher-active { opacity: 1 !important; color: var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)); }
