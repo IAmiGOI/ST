@@ -56,15 +56,27 @@ async function postJson(context, endpoint, body) {
  * Returns `{ checked: false }` for anything that stops this from giving a real
  * answer (no extensionName, non-git install, network error) — never throws, and
  * callers must treat `checked:false` as "proceed normally, say nothing".
- * `{ checked: true, upToDate }` otherwise. Pass `{ global: true }` for an install
- * from ST's shared third-party directory (see isGlobalInstall) — omitted/false
- * means "look in the current user's own extensions", ST's default.
+ * `{ checked: true, upToDate, currentCommitHash, currentBranchName, remoteUrl }`
+ * otherwise — ST's own `/version` endpoint already returns those last three (a git
+ * install's exact local commit/branch and its remote's URL); they used to be
+ * discarded here, but update-diagnostics.js needs the real local commit hash to
+ * independently cross-check `upToDate` against GitHub's actual branch HEAD (see
+ * that file — this is what makes bug #3, "reports up to date but visibly isn't",
+ * provable instead of just guessed at). Pass `{ global: true }` for an install from
+ * ST's shared third-party directory (see isGlobalInstall) — omitted/false means
+ * "look in the current user's own extensions", ST's default.
  */
 export async function checkCoreUpdate(context, extensionName, { global = false } = {}) {
     if (!extensionName) return { checked: false };
     try {
         const data = await postJson(context, VERSION_ENDPOINT, { extensionName, ...(global ? { global: true } : {}) });
-        return { checked: true, upToDate: Boolean(data?.isUpToDate) };
+        return {
+            checked: true,
+            upToDate: Boolean(data?.isUpToDate),
+            currentCommitHash: data?.currentCommitHash || null,
+            currentBranchName: data?.currentBranchName || null,
+            remoteUrl: data?.remoteUrl || null,
+        };
     } catch (error) {
         console.info('[ST Module Engine] Core update check skipped (not a git install, or the check failed):', error?.message || error);
         return { checked: false };

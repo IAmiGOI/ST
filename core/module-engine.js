@@ -80,7 +80,7 @@ export class ModuleEngine {
 
     constructor(getContext) {
         this.getContext = getContext;
-        this.sidecar = new SidecarManager(() => this.settings(), () => this.saveSettings());
+        this.sidecar = new SidecarManager(() => this.settings(), () => this.saveSettings(), () => this.getContext());
         this.#data = new ModuleDataBus({
             getContext: () => this.getContext(),
             onContaminate: report => this.#log('warning', report.id?.split(':')[0] ?? 'bus', report.message),

@@ -19,6 +19,68 @@ test('SideCar Manager adds independent workers', () => {
     assert.notEqual(manager.configs()[0], manager.configs()[1]);
 });
 
+// --- Main-LLM fallback: priority-0, never part of the normal worker pool, only
+// reachable via the explicit requestFallback()/forModule().requestFallback() path.
+
+function makeManager(root = { sidecars: [{ id: 'primary', name: 'Primary', enabled: false }] }, context = { generateRaw: async () => 'fallback answer' }) {
+    return new SidecarManager(() => root, () => {}, () => context);
+}
+
+test('the main-LLM fallback is enabled by default, with no configuration needed', () => {
+    const manager = makeManager();
+    assert.equal(manager.mainLlmFallbackEnabled(), true);
+    assert.equal(manager.isMainLlmFallbackAvailable(), true);
+});
+
+test('setMainLlmFallbackEnabled(false) turns it off, and requestFallback() then refuses', async () => {
+    const manager = makeManager();
+    manager.setMainLlmFallbackEnabled(false);
+    assert.equal(manager.mainLlmFallbackEnabled(), false);
+    assert.equal(manager.isMainLlmFallbackAvailable(), false);
+    await assert.rejects(() => manager.requestFallback({ prompt: 'hi' }), /turned off/);
+});
+
+test('isMainLlmFallbackAvailable() is false when generateRaw is missing from this ST build, even with the toggle on', () => {
+    const manager = makeManager(undefined, {});
+    assert.equal(manager.isMainLlmFallbackAvailable(), false);
+});
+
+test('requestFallback() reaches the main LLM directly — no configured SideCar needed at all', async () => {
+    const manager = makeManager({ sidecars: [{ id: 'primary', name: 'Primary', enabled: false }] });
+    assert.equal(manager.isConfigured(), false, 'no real SideCar worker is configured');
+    const result = await manager.requestFallback({ prompt: 'hi' });
+    assert.equal(result, 'fallback answer');
+});
+
+test('a configured, healthy SideCar worker never gets bypassed in favor of the fallback — request() and requestFallback() are two entirely separate paths', async () => {
+    let sidecarCalled = false;
+    let fallbackCalled = false;
+    const root = { sidecars: [{ id: 'primary', name: 'Primary', enabled: true, endpoint: 'https://example.test/v1', model: 'small' }] };
+    const manager = makeManager(root, { generateRaw: async () => { fallbackCalled = true; return 'fallback'; } });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => { sidecarCalled = true; return { ok: true, json: async () => ({ choices: [{ message: { content: 'sidecar answer' } }] }) }; };
+    try {
+        const result = await manager.request({ prompt: 'hi' });
+        assert.equal(result, 'sidecar answer');
+        assert.equal(sidecarCalled, true);
+        assert.equal(fallbackCalled, false, 'request() must never silently reach for the fallback on its own');
+    } finally { globalThis.fetch = originalFetch; }
+});
+
+test('forModule().requestFallback and .isFallbackAvailable are wired through to the manager', async () => {
+    const manager = makeManager();
+    const host = manager.forModule('some-module');
+    assert.equal(host.isFallbackAvailable(), true);
+    assert.equal(await host.requestFallback({ prompt: 'hi' }), 'fallback answer');
+});
+
+test('a released acquire() lease refuses requestFallback() too, same as request()', async () => {
+    const manager = makeManager();
+    const lease = manager.acquire('some-module');
+    lease.release();
+    assert.throws(() => lease.requestFallback({ prompt: 'hi' }), /lease has been released/);
+});
+
 // --- healthy / checkHealth() — drives the blinking-blue-border indicator on the
 // outer SideCar Manager card (core/module-engine.js's mount()): null until checked
 // (no blink), then true/false depending on whether anything actually answers.

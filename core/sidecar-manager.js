@@ -1,9 +1,11 @@
 import { SidecarService } from './sidecar-service.js';
+import { MainLlmService } from './main-llm-service.js';
 import { h, list, signal, Button } from './widgets.js';
 
 /** Schedules module requests over several SideCar configurations for lowest queue wait. */
 export class SidecarManager {
-    #root; #save; #services = new Map(); #queue = []; #running = new Map();
+    #root; #save; #getContext; #services = new Map(); #queue = []; #running = new Map();
+    #mainLlm;
     // null = not yet checked (no blink — avoids a false-positive flash before the
     // startup check below has had a chance to run); true = at least one configured
     // worker answered; false = either nothing is configured at all, or every
@@ -11,7 +13,12 @@ export class SidecarManager {
     // this to blink the outer card's border blue. Exposed as a plain public field
     // (the raw signal), same convention as e.g. full-screen-panel.js's `visible`.
     healthy = signal(null);
-    constructor(settingsRoot, save) { this.#root = settingsRoot; this.#save = save; }
+    constructor(settingsRoot, save, getContext) {
+        this.#root = settingsRoot;
+        this.#save = save;
+        this.#getContext = getContext;
+        this.#mainLlm = new MainLlmService(getContext);
+    }
     configs() {
         const root = this.#root();
         if (!Array.isArray(root.sidecars)) {
@@ -27,11 +34,55 @@ export class SidecarManager {
         if (!this.#services.has(config.id)) this.#services.set(config.id, new SidecarService(() => ({ sidecar: config }), this.#save));
         return this.#services.get(config.id);
     }
+    // Deliberately excludes the main-LLM fallback — it is priority-0 by design, never
+    // part of the normal round-robin pool `request()`/`#pick()` draw from. See
+    // requestFallback() below, the only way anything reaches it.
     available() { return this.configs().filter(config => this.service(config.id).isConfigured()); }
     isConfigured() { return this.available().length > 0; }
     profiles() { const seen = new Map(); for (const config of this.configs()) for (const profile of this.service(config.id).profiles()) seen.set(profile.id, profile); return [...seen.values()].map(({ id, name }) => ({ id, name })); }
-    forModule(moduleId) { return Object.freeze({ request: options => this.request({ ...options, moduleId }), acquire: label => this.acquire(moduleId, label), isConfigured: () => this.isConfigured(), profiles: () => this.profiles(), getSettings: () => ({ workers: this.configs().length, queued: this.#queue.length, running: [...this.#running.values()].reduce((a, b) => a + b, 0) }), diagnostics: () => this.configs().map(config => { const settings = this.service(config.id).settings(); return { id: config.id, name: config.name, enabled: settings.enabled, hasEndpoint: Boolean(settings.endpoint), hasModel: Boolean(settings.model), configured: this.service(config.id).isConfigured() }; }) }); }
-    acquire(moduleId, label = moduleId) { let released = false; return Object.freeze({ request: options => { if (released) throw new Error('This SideCar lease has been released.'); return this.request({ ...options, moduleId }); }, release: () => { released = true; }, isConfigured: () => this.isConfigured(), label }); }
+
+    /** Whether the main-LLM fallback (below) is allowed to be used at all — on by default; a silent "no fallback exists" defeats the point, but this is still an explicit, callable escape hatch, never automatic. */
+    mainLlmFallbackEnabled() { return this.#root().mainLlmFallbackEnabled !== false; }
+    setMainLlmFallbackEnabled(value) { this.#root().mainLlmFallbackEnabled = Boolean(value); this.#save(); }
+    isMainLlmFallbackAvailable() { return this.mainLlmFallbackEnabled() && this.#mainLlm.isConfigured(); }
+
+    /**
+     * Routes a request through ST's own main LLM connection instead of any
+     * configured SideCar — see core/main-llm-service.js. Never called by
+     * request()/#pump() themselves; a module calls this directly, by name, only
+     * after deciding a specific failure warrants it (e.g. every configured worker
+     * just failed). Bypasses the queue entirely — this isn't one of the rate-limited
+     * HTTP workers request() balances load across, it's a fundamentally different,
+     * already-shared resource ST itself manages.
+     */
+    async requestFallback(options) {
+        if (!this.mainLlmFallbackEnabled()) throw new Error('The main LLM fallback is turned off.');
+        return this.#mainLlm.request(options);
+    }
+
+    forModule(moduleId) {
+        return Object.freeze({
+            request: options => this.request({ ...options, moduleId }),
+            requestFallback: options => this.requestFallback({ ...options, moduleId }),
+            acquire: label => this.acquire(moduleId, label),
+            isConfigured: () => this.isConfigured(),
+            isFallbackAvailable: () => this.isMainLlmFallbackAvailable(),
+            profiles: () => this.profiles(),
+            getSettings: () => ({ workers: this.configs().length, queued: this.#queue.length, running: [...this.#running.values()].reduce((a, b) => a + b, 0) }),
+            diagnostics: () => this.configs().map(config => { const settings = this.service(config.id).settings(); return { id: config.id, name: config.name, enabled: settings.enabled, hasEndpoint: Boolean(settings.endpoint), hasModel: Boolean(settings.model), configured: this.service(config.id).isConfigured() }; }),
+        });
+    }
+    acquire(moduleId, label = moduleId) {
+        let released = false;
+        return Object.freeze({
+            request: options => { if (released) throw new Error('This SideCar lease has been released.'); return this.request({ ...options, moduleId }); },
+            requestFallback: options => { if (released) throw new Error('This SideCar lease has been released.'); return this.requestFallback({ ...options, moduleId }); },
+            release: () => { released = true; },
+            isConfigured: () => this.isConfigured(),
+            isFallbackAvailable: () => this.isMainLlmFallbackAvailable(),
+            label,
+        });
+    }
     request(options) { return new Promise((resolve, reject) => { this.#queue.push({ options, resolve, reject }); this.#pump(); }); }
     #pick() { const workers = this.available(); return workers.sort((a, b) => (this.#running.get(a.id) ?? 0) - (this.#running.get(b.id) ?? 0))[0]; }
     #pump() { while (this.#queue.length) { const config = this.#pick(); if (!config) { const item = this.#queue.shift(); item.reject(new Error('No configured SideCar is available.')); continue; } const running = this.#running.get(config.id) ?? 0; if (running > 0) return; const item = this.#queue.shift(); this.#running.set(config.id, running + 1); this.service(config.id).request(item.options).then(item.resolve, item.reject).finally(() => { this.#running.set(config.id, (this.#running.get(config.id) ?? 1) - 1); this.#pump(); }); } }

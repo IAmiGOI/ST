@@ -46,8 +46,21 @@ test('checkCoreUpdate reports checked:true and the real isUpToDate value on a su
     });
     try {
         const result = await checkCoreUpdate(context, 'ST');
-        assert.deepEqual(result, { checked: true, upToDate: false });
+        assert.deepEqual(result, { checked: true, upToDate: false, currentCommitHash: null, currentBranchName: 'main', remoteUrl: null });
         assert.deepEqual(requestBody, { extensionName: 'ST' });
+    } finally { restore(); }
+});
+
+test('checkCoreUpdate passes through currentCommitHash/currentBranchName/remoteUrl — update-diagnostics.js needs the real local commit to cross-check against GitHub', async () => {
+    const { context, restore } = makeContext(async () => ({
+        ok: true,
+        json: async () => ({ isUpToDate: true, currentCommitHash: 'deadbeef'.repeat(5), currentBranchName: 'main', remoteUrl: 'https://github.com/IAmiGOI/ST.git' }),
+    }));
+    try {
+        const result = await checkCoreUpdate(context, 'ST');
+        assert.equal(result.currentCommitHash, 'deadbeef'.repeat(5));
+        assert.equal(result.currentBranchName, 'main');
+        assert.equal(result.remoteUrl, 'https://github.com/IAmiGOI/ST.git');
     } finally { restore(); }
 });
 

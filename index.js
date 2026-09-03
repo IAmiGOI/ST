@@ -3,6 +3,7 @@ import { createFullScreenPanel } from './core/full-screen-panel.js';
 import { createModuleBrowserPanel, renderBrowserTab } from './core/module-browser.js';
 import { LorebookService } from './core/lorebook-service.js';
 import { checkCoreUpdate, applyCoreUpdate, deriveExtensionName, isGlobalInstall } from './core/self-update.js';
+import { diagnoseCoreUpdate } from './core/update-diagnostics.js';
 import { effect } from './core/reactive.js';
 import { notebookModule } from './modules/notebook/index.js';
 import { timeModule } from './modules/time/index.js';
@@ -27,6 +28,13 @@ const EXTENSION_IS_GLOBAL = isGlobalInstall(import.meta.url);
 // this cooldown entirely (an explicit click should never be silently ignored).
 const UPDATE_SESSION_FLAG = 'stme_update_attempted';
 const UPDATE_RETRY_COOLDOWN_MS = 20000;
+// This extension's own repo — see update-diagnostics.js. Hardcoded rather than
+// parsed from ST's `remoteUrl` response field: that's the ground truth for what
+// git is actually tracking, but this is a diagnostic tool checking against the
+// repo this codebase is actually meant to ship from, not whatever a broken/
+// misconfigured local remote happens to say.
+const CORE_REPO_OWNER = 'IAmiGOI';
+const CORE_REPO_NAME = 'ST';
 
 function updateRecentlyAttempted() {
     const last = Number(sessionStorage.getItem(UPDATE_SESSION_FLAG) || 0);
@@ -105,6 +113,7 @@ async function attemptCoreUpdate() {
     const context = getContext();
     const status = await checkCoreUpdate(context, EXTENSION_NAME, { global: EXTENSION_IS_GLOBAL });
     if (!status.checked) return;
+    logUpdateDiagnostic(status); // fire-and-forget — see below; never blocks or affects the real flow
     if (status.upToDate) { removeUpdateBanner(); return; }
 
     sessionStorage.setItem(UPDATE_SESSION_FLAG, String(Date.now()));
@@ -113,6 +122,31 @@ async function attemptCoreUpdate() {
     if (result.applied) { window.location.reload(); return; }
     overlay.remove();
     renderUpdateBanner();
+}
+
+/**
+ * Cross-checks ST's isUpToDate answer against GitHub's real branch HEAD (see
+ * update-diagnostics.js) and logs the result to the console — never a toast/banner,
+ * same "silent unless something's actually wrong" rule as attemptCoreUpdate itself.
+ * Purely observational: fire-and-forget, its own failures are swallowed, and it
+ * never influences whether an update gets applied. Exists so a future "reports up
+ * to date but is visibly stale" report has a real trail instead of a guess.
+ */
+function logUpdateDiagnostic(status) {
+    diagnoseCoreUpdate({ currentCommitHash: status.currentCommitHash, currentBranchName: status.currentBranchName, owner: CORE_REPO_OWNER, repo: CORE_REPO_NAME })
+        .then(diagnosis => {
+            if (!diagnosis.applicable) return;
+            const localShort = diagnosis.localSha.slice(0, 7);
+            const remoteShort = diagnosis.remoteSha.slice(0, 7);
+            if (diagnosis.matches) {
+                console.info(`[ST Module Engine] Core update check: local commit ${localShort} matches GitHub's latest on "${diagnosis.branch}".`);
+            } else if (status.upToDate) {
+                console.warn(`[ST Module Engine] Core update MISMATCH: ST reported up to date at commit ${localShort}, but GitHub's latest commit on "${diagnosis.branch}" is ${remoteShort}. The local git checkout is stuck behind origin despite the update endpoint saying otherwise.`);
+            } else {
+                console.info(`[ST Module Engine] Core update check: local commit ${localShort} is behind GitHub's latest ${remoteShort} on "${diagnosis.branch}" — an update is about to be applied.`);
+            }
+        })
+        .catch(() => {}); // diagnoseCoreUpdate() itself never throws; defensive only
 }
 
 async function init() {
