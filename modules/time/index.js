@@ -111,7 +111,7 @@ export function buildTimeRequest(chat, settings = TIME_DEFAULTS, currentTime = s
     const fields = sanitizeFields(settings.fields);
     const recent = (chat ?? []).filter(item => !item.is_system).slice(-10).map(item => `${item.is_user ? 'Player' : 'Character'}: ${String(item.mes ?? '').slice(0, 900)}`).join('\n\n');
     return {
-        systemPrompt: `You are an in-world time tracker for a roleplay chat. Track only the fields below, using each note to decide how to format it:\n${describeFields(fields)}\n\nThe current known in-world time is "${currentTime}". Infer the next current in-world time based on how much time has plausibly passed. Return ONLY a JSON object with exactly these keys: ${fields.map(field => `"${field.name}"`).join(', ')}. No markdown, no explanation.`,
+        systemPrompt: `You are an in-world time tracker for a roleplay chat. Track only the fields below, using each note to decide how to format it:\n${describeFields(fields)}\n\nThe current known in-world time is "${currentTime}". Infer the next current in-world time based on how much time has plausibly passed. You only need to infer about how many time passed between last message and start of the this one. Return ONLY a JSON object with exactly these keys: ${fields.map(field => `"${field.name}"`).join(', ')}. No markdown, no explanation.`,
         prompt: `ROLEPLAY CONTEXT:\n${recent}\n\nThe character is about to respond. Return the updated JSON time object only.`,
     };
 }
