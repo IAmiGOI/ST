@@ -10,6 +10,7 @@ import { timeModule } from './modules/time/index.js';
 import { trackerModule } from './modules/tracker/index.js';
 import { musicModule } from './modules/music/index.js';
 import { macrosModule } from './modules/macros/index.js';
+import { diceModule } from './modules/dice/index.js';
 
 // See core/self-update.js — needs this exact script's own URL, which only index.js
 // (the real entry point ST imports) can supply via import.meta.url.
@@ -156,6 +157,7 @@ async function init() {
     engine.register(trackerModule);
     engine.register(musicModule);
     engine.register(macrosModule);
+    engine.register(diceModule);
     await engine.start();
 
     const target = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
@@ -186,7 +188,7 @@ async function init() {
 
 /**
  * SillyTavern has no plugin API for registering a top-level tab — extensions that add
- * one (e.g. Character Library) do it by inserting their own icon into ST's real
+ * one (e.g. Character Library) do it by inserting their own icon into the real
  * persistent top-right icon row and building the "tab" themselves as an overlay. This
  * mirrors that exact insertion point + fallback chain and native icon markup so the
  * button is visually indistinguishable from ST's own.
