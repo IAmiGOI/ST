@@ -65,6 +65,7 @@ export const lorebookModule = {
     id: MODULE_ID,
     title: 'Lorebook Scan',
     description: 'Reads the current character/chat lorebook and exposes it on the bus — an index for the UI, and a query tool for other modules.',
+    about: 'Looks at your lorebook (the background info you\'ve written about the world/characters) and makes a simple list of what\'s in it, so the other tools here can find and use specific pieces of it without you doing anything extra.',
     defaultEnabled: false,
 
     activate(host) {

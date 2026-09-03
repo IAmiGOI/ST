@@ -1,6 +1,6 @@
 import { SidecarManager } from './sidecar-manager.js';
 import { ModuleDataBus } from './data-bus.js';
-import { h, show, signal, computed, effectOn, Button, TextInput, Toggle, DraggableList } from './widgets.js';
+import { h, show, signal, computed, effectOn, Button, TextInput, Toggle, DraggableList, InfoDot } from './widgets.js';
 import { createDevPanel } from './dev-panel.js';
 import { resolveModuleUrl } from './module-loader.js';
 
@@ -290,7 +290,7 @@ export class ModuleEngine {
         const sidecarCard = h('details', { class: 'stme-base-card', open: !this.layout().collapsed.sidecar });
         sidecarCard.addEventListener('toggle', () => { this.layout().collapsed.sidecar = !sidecarCard.open; this.saveSettings(); });
         const sidecarHeader = h('summary', { class: 'stme-module-header' },
-            h('div', {}, h('strong', {}, 'SideCar Manager'), h('small', {}, 'Balanced shared model workers and profiles for all modules.')));
+            h('div', {}, h('strong', {}, 'SideCar Manager', InfoDot('This is where you connect the extension to an AI model — a separate one from your main chat model — that the tools above use to do their own thinking (like summarizing, tracking values, or picking music). Nothing here works until you fill this in.')), h('small', {}, 'Balanced shared model workers and profiles for all modules.')));
         const sidecarContent = h('div', {});
         sidecarCard.append(sidecarHeader, sidecarContent);
         this.sidecar.render(sidecarContent, (level, message, title) => this.#toast(level, message, title));
@@ -315,7 +315,7 @@ export class ModuleEngine {
     #renderModuleHeader(module) {
         const enabledDisplay = computed(() => this.#enabledMap()[module.id] ?? false);
         return [
-            h('div', {}, h('strong', {}, module.title), h('small', {}, module.description ?? '')),
+            h('div', {}, h('strong', {}, module.title, module.about ? InfoDot(module.about) : null), h('small', {}, module.description ?? '')),
             Toggle('Enabled', enabledDisplay, {
                 onChange: async (checked, input) => {
                     input.disabled = true;
@@ -387,7 +387,7 @@ export class ModuleEngine {
         const busy = signal(false);
         const card = h('details', { class: 'stme-base-card' });
         const header = h('summary', { class: 'stme-module-header' },
-            h('div', {}, h('strong', {}, 'Module loader'), h('small', {}, 'Load a self-contained module from a GitHub repo or a direct .js link.')));
+            h('div', {}, h('strong', {}, 'Module loader', InfoDot('Lets you add a new tool to this extension by pasting a link, instead of installing and managing a whole separate extension for every single feature.')), h('small', {}, 'Load a self-contained module from a GitHub repo or a direct .js link.')));
         const content = h('div', { class: 'stme-module-content stme-loader' },
             TextInput(url, { type: 'url', placeholder: 'https://github.com/user/repo (or a direct .js URL)' }),
             Button('Load module', async () => {

@@ -2,6 +2,23 @@ import { h, list, effectOn, effect } from './dom.js';
 
 const stopPropagation = event => event.stopPropagation();
 
+/**
+ * A small "ⓘ" badge that reveals a plain-language explanation on hover (or keyboard
+ * focus — it's a real focusable element, not just a `title=` attribute, so the
+ * tooltip is readable without a mouse and isn't stuck with the browser's own
+ * unstyled, delayed native tooltip). Meant for the one-sentence "what is this,
+ * really" explanation next to a card's title — aimed at someone who has never
+ * configured an LLM extension before, not a technical reference (that belongs in
+ * `description`/MODULES.md instead). `on:click` stops propagation so it never
+ * toggles a parent `<details>` card open/closed.
+ */
+export function InfoDot(text) {
+    return h('span', { class: 'stme-info-dot', tabindex: '0', role: 'note', 'aria-label': text, 'on:click': stopPropagation },
+        'i',
+        h('span', { class: 'stme-info-tooltip' }, text),
+    );
+}
+
 /** Label + control row, matching the shared `.stme-field` look used across every module. */
 export function Field(labelText, control, { hint, stack = false } = {}) {
     return h('label', { class: stack ? 'stme-field stme-field-stack' : 'stme-field' },

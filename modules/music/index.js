@@ -154,6 +154,7 @@ export const musicModule = {
     id: MODULE_ID,
     title: 'Music',
     description: 'Classifies the scene into keys, picks a matching track, and plays it in the background.',
+    about: 'Picks and plays background music that matches the current scene on its own, based on mood/location words it recognizes — like a soundtrack that changes itself as the story moves.',
     defaultEnabled: false,
 
     activate(host) {

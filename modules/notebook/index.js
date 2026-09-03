@@ -9,6 +9,7 @@ export const notebookModule = {
     id: 'notebook',
     title: 'Notebook / Notes',
     description: 'Private per-chat working memory exposed as a native function tool.',
+    about: 'A private notebook the AI can write in and read back during the story — like sticky notes only it can see, used to remember things (plans, secrets, character goals) that shouldn\'t appear in the actual conversation text.',
     defaultEnabled: true,
 
     activate(host) {

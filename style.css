@@ -4,6 +4,12 @@
 .stme-settings .stme-module-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 10px; background: var(--SmartThemeBlurTintColor); }
 .stme-settings .stme-module-header small { display: block; margin-top: 3px; opacity: .7; }
 .stme-settings .stme-toggle { white-space: nowrap; }
+
+/* Plain-language "what is this" hover badge (InfoDot in core/widgets.js) — next to a card title. */
+.stme-info-dot { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: 6px; border-radius: 50%; background: color-mix(in srgb, var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)) 65%, transparent); color: var(--SmartThemeBodyColor); font: italic 700 10px/1 Georgia, serif; cursor: help; user-select: none; vertical-align: middle; }
+.stme-info-dot:hover, .stme-info-dot:focus-visible { background: var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)); outline: none; }
+.stme-info-tooltip { position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translate(-50%, 4px); width: max-content; max-width: 260px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--SmartThemeBorderColor); background: var(--SmartThemeBlurTintColor); box-shadow: 0 10px 26px rgba(0, 0, 0, .4); font: normal 400 .82em/1.4 var(--mainFontFamily, inherit); color: var(--SmartThemeBodyColor); text-align: left; white-space: normal; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .15s ease, transform .15s ease; z-index: 20; }
+.stme-info-dot:hover .stme-info-tooltip, .stme-info-dot:focus-visible .stme-info-tooltip { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
 .stme-settings .stme-module-content { padding: 10px; }
 .stme-settings .stme-note-settings { padding-bottom: 8px; border-bottom: 1px solid var(--SmartThemeBorderColor); }
 .stme-settings .stme-note-settings label { display: flex; align-items: center; justify-content: space-between; gap: 10px; }

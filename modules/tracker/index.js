@@ -498,6 +498,7 @@ export const trackerModule = {
     id: 'tracker',
     title: 'Tracker',
     description: 'Independent tracker blocks, each with its own SideCar profile, prompt, and fields.',
+    about: 'Watches the story and keeps a running scoreboard of things you define — health, mood, relationship points, anything with a value that changes over time — and shows the current numbers next to each message.',
     defaultEnabled: false,
 
     activate(host) {

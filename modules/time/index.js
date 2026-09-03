@@ -50,7 +50,9 @@ function getCurrentTime(context, settings) { return context.chatMetadata?.stme_r
 function setCurrentTime(context, time) { context.chatMetadata ??= {}; context.chatMetadata.stme_rp_time_current = time; context.saveMetadataDebounced?.(); }
 
 export const timeModule = {
-    id: 'time', title: 'RP Time', description: 'Runs SideCar in parallel with generation and appends the inferred in-world time.', defaultEnabled: false,
+    id: 'time', title: 'RP Time', description: 'Runs SideCar in parallel with generation and appends the inferred in-world time.',
+    about: 'Keeps an in-story clock (day, time, morning/evening) that moves forward on its own as the story goes on, and shows it under each message — like a subtitle telling you what time it is in the scene.',
+    defaultEnabled: false,
     activate(host) {
         const log = (...args) => console.info('[STME:time]', ...args);
         const warn = (...args) => console.warn('[STME:time]', ...args);
