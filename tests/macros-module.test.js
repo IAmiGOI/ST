@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ModuleEngine } from '../core/module-engine.js';
-import { macrosModule, sanitizeMacroName } from '../modules/macros/index.js';
+import { macrosModule, sanitizeMacroName, scanDependencies } from '../modules/macros/index.js';
 import { trackerModule } from '../modules/tracker/index.js';
 
 /**
@@ -153,4 +153,54 @@ test('a disabled program (enabled: false) is not registered, and re-enabling it 
 test('sanitizeMacroName strips whitespace/invalid characters the same way Tracker normalizes field names', () => {
     assert.equal(sanitizeMacroName('  my macro!! '), 'my_macro');
     assert.equal(sanitizeMacroName(''), '');
+});
+
+// --- scanDependencies() — the static "what could this macro touch" edges published
+// to core/dependency-scanner.js via host.data.set('dependencies', ...); see that
+// file and MODULES.md's State-Track section for the bigger picture.
+
+test('scanDependencies finds a cross-module get "namespace:key" reference', () => {
+    const program = { kind: 'code', enabled: true, source: 'return get "tracker:field:b1:health"' };
+    assert.deepEqual(scanDependencies([program]), [{ owner: 'tracker', kind: 'macro-get', detail: 'tracker:field:b1:health' }]);
+});
+
+test('scanDependencies ignores a bareword get (the program\'s own saved state, not a cross-module read)', () => {
+    const program = { kind: 'code', enabled: true, source: 'return get "count"' };
+    assert.deepEqual(scanDependencies([program]), []);
+});
+
+test('scanDependencies ignores plain-text programs and disabled programs', () => {
+    const programs = [
+        { kind: 'text', enabled: true, source: 'get "tracker:x" is just literal text here' },
+        { kind: 'code', enabled: false, source: 'return get "tracker:x"' },
+    ];
+    assert.deepEqual(scanDependencies(programs), []);
+});
+
+test('scanDependencies skips a program with a syntax error instead of throwing — its own status channel already reports that separately', () => {
+    const program = { kind: 'code', enabled: true, source: 'set x to' };
+    assert.doesNotThrow(() => scanDependencies([program]));
+    assert.deepEqual(scanDependencies([program]), []);
+});
+
+test('scanDependencies finds every get, including ones nested inside if/repeat/while', () => {
+    const program = {
+        kind: 'code', enabled: true,
+        source: 'if get "a:x" > 0 then\nrepeat get "b:y" times\nset z to get "c:z"\nend\nend\nreturn z',
+    };
+    const owners = scanDependencies([program]).map(edge => edge.owner).sort();
+    assert.deepEqual(owners, ['a', 'b', 'c']);
+});
+
+test('sync() publishes parsed dependencies onto the bus, readable through engine.dependencyScanner', async () => {
+    const { engine } = makeEngine();
+    engine.register(macrosModule);
+    addProgram(engine, {
+        kind: 'code', macroName: 'total_hp',
+        source: 'set h to get "tracker:field:b1:health"\nreturn h',
+    });
+    await engine.enable('macros');
+
+    assert.deepEqual(engine.bus.get('macros', 'dependencies'), [{ owner: 'tracker', kind: 'macro-get', detail: 'tracker:field:b1:health' }]);
+    assert.deepEqual(engine.dependencyScanner.dependenciesOf('macros'), ['tracker']);
 });

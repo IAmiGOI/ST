@@ -111,8 +111,12 @@ export function buildTimeRequest(chat, settings = TIME_DEFAULTS, currentTime = s
     const fields = sanitizeFields(settings.fields);
     const recent = (chat ?? []).filter(item => !item.is_system).slice(-10).map(item => `${item.is_user ? 'Player' : 'Character'}: ${String(item.mes ?? '').slice(0, 900)}`).join('\n\n');
     return {
-        systemPrompt: `You are an in-world time tracker for a roleplay chat. Track only the fields below, using each note to decide how to format it:\n${describeFields(fields)}\n\nThe current known in-world time is "${currentTime}". Infer the next current in-world time based on how much time has plausibly passed. You only need to infer about how many time passed between last message and start of the this one. Extra context provided just for context. Do not account for it in your evaluation Return ONLY a JSON object with exactly these keys: ${fields.map(field => `"${field.name}"`).join(', ')}. No markdown, no explanation.`,
-        prompt: `ROLEPLAY CONTEXT:\n${recent}\n\nThe character is about to respond. Return the updated JSON time object only.`,
+        systemPrompt: `You are an in-world time tracker for a roleplay chat. Track only the fields below, using each note to decide how to format it:\n${describeFields(fields)}\n\nThe current known in-world time is "${currentTime}". Infer the next current in-world time based on how much time has plausibly passed. Return ONLY a JSON object with exactly these keys: ${fields.map(field => `"${field.name}"`).join(', ')}. No markdown, no explanation.`,
+        // "already responded" (past tense) — this now runs AFTER generation
+        // completes (see activate()'s MESSAGE_RECEIVED handler), with the
+        // character's actual new reply already the last entry in `recent`
+        // above, not before it happens as an earlier version of this module did.
+        prompt: `ROLEPLAY CONTEXT:\n${recent}\n\nThe character just responded (see the end of the context above). Return the updated JSON time object only.`,
     };
 }
 export function parseTimeResponse(value, settings = TIME_DEFAULTS) {
@@ -130,11 +134,38 @@ function renderBadge(index, label) { const root = document.querySelector(`.mes[m
 export function appendTime(message, time, settings = TIME_DEFAULTS) { const parsed = parseTimeResponse(time, settings); if (!parsed.label || message?.extra?.[TIME_EXTRA_KEY]) return false; message.extra ??= {}; message.extra[TIME_EXTRA_KEY] = parsed.label; message.extra.stme_rp_time_data = parsed.data; return true; }
 function resolveMessage(chat, id) { if (Number.isInteger(id) && chat[id]) return { message: chat[id], index: id }; const index = chat.findIndex(item => item.mesid === id || item.send_date === id); return index >= 0 ? { message: chat[index], index } : null; }
 function updateMessage(context, index, message) { context.updateMessageBlock?.(index, message); context.saveChatConditional?.(); context.saveChat?.(); }
-function getCurrentTime(context, settings) { return context.chatMetadata?.stme_rp_time_current || settings.startTime; }
-function setCurrentTime(context, time) { context.chatMetadata ??= {}; context.chatMetadata.stme_rp_time_current = time; context.saveMetadataDebounced?.(); }
+
+/**
+ * The in-world time as of the most recent labeled character message, found by
+ * scanning `context.chat` backward — NOT a separately maintained value. An
+ * earlier version tracked a single `chatMetadata.stme_rp_time_current` scalar
+ * that only ever moved forward, with nothing to roll it back when a message got
+ * rerolled or deleted: a reroll's own next SideCar request would start from a
+ * "current time" that was itself computed from the discarded draft, and a
+ * deleted message's own time advance was never undone either. Scanning the
+ * chat fresh every time needs no rollback logic for either case: the chat
+ * array IS the source of truth, and it's already correct after ST removes or
+ * replaces a message — there's nothing left for this module to separately
+ * keep in sync.
+ *
+ * `beforeIndex`, optional, bounds the scan to messages strictly before that
+ * index — used when building the request for a specific message (see
+ * activate() below) so a reroll's own now-cleared label (or, if not yet
+ * cleared, a stale one) is never mistaken for "the current time"; the
+ * `host.services` provider below omits it, since a general "what time is it
+ * right now" query should see the true latest label, unbounded.
+ */
+function getCurrentTime(context, settings, beforeIndex = Infinity) {
+    const chat = context.chat ?? [];
+    for (let i = Math.min(beforeIndex, chat.length) - 1; i >= 0; i--) {
+        const label = chat[i]?.extra?.[TIME_EXTRA_KEY];
+        if (label) return label;
+    }
+    return settings.startTime;
+}
 
 export const timeModule = {
-    id: 'time', title: 'RP Time', description: 'Runs SideCar in parallel with generation and appends the inferred in-world time.',
+    id: 'time', title: 'RP Time', description: 'Asks SideCar for the in-world time after each reply and appends it.',
     about: 'Keeps an in-story clock (day, time, morning/evening) that moves forward on its own as the story goes on, and shows it under each message — like a subtitle telling you what time it is in the scene.',
     defaultEnabled: false,
     version: '1.0.0',
@@ -143,7 +174,7 @@ export const timeModule = {
     activate(host) {
         const log = (...args) => console.info('[STME:time]', ...args);
         const warn = (...args) => console.warn('[STME:time]', ...args);
-        let pending = null; let running = false;
+        let running = false;
 
         // The only sanctioned way another module reads RP Time's current value — see
         // MODULES.md's host.services section (the same request/provider pattern
@@ -155,24 +186,18 @@ export const timeModule = {
             getCurrent: () => getCurrentTime(host.context(), host.moduleSettings(TIME_DEFAULTS)),
         });
 
-        const start = host.onEvent('GENERATION_STARTED', () => {
-            if (pending) { log('GENERATION_STARTED ignored — a request is already pending.'); return; }
-            if (!host.sidecar.isConfigured()) { warn('GENERATION_STARTED ignored — SideCar is not configured. Per-worker state:', host.sidecar.diagnostics()); return; }
-            const context = host.context(); const settings = host.moduleSettings(TIME_DEFAULTS);
-            const built = buildTimeRequest(context.chat, settings, getCurrentTime(context, settings));
-            log(`GENERATION_STARTED — sending SideCar request (profile "${settings.sidecarProfile}").`);
-            pending = host.sidecar.request({ ...built, profileId: settings.sidecarProfile })
-                .then(result => { log('SideCar request resolved:', result); return result; })
-                .catch(error => { warn('SideCar request rejected:', error); return { error }; });
-        });
+        // Fires once per real reply, AFTER it exists — not at GENERATION_STARTED any
+        // more. An earlier version started the SideCar request in parallel with
+        // generation for a faster badge, but that meant asking SideCar to infer the
+        // time from context that didn't yet include what the character was about to
+        // say — a real accuracy cost for a latency win. This trades that latency back
+        // for a request that can actually see the finished reply, and removes the
+        // GENERATION_STARTED/"pending request" bookkeeping entirely — there's no
+        // longer a race between generation finishing and a SideCar call started
+        // earlier to synchronize with.
         const received = host.onEvent('MESSAGE_RECEIVED', async (messageId, type) => {
             log(`MESSAGE_RECEIVED (messageId=${messageId}, type=${type}).`);
             if (running) { log('Ignored — already processing a previous MESSAGE_RECEIVED.'); return; }
-            // Always drop whatever was pending once a MESSAGE_RECEIVED fires — even for
-            // an excluded type — so it can never leak into a LATER, unrelated
-            // generation (the next GENERATION_STARTED would otherwise see `pending`
-            // still set and skip sending a fresh request, silently breaking tracking).
-            const request = pending; pending = null;
             // 'regenerate'/'swipe' are deliberately NOT excluded here — both are a real
             // reroll (a genuinely new response) and must still trigger a fresh time
             // update; excluding them used to silently swallow every reroll's result.
@@ -183,20 +208,24 @@ export const timeModule = {
             // A reroll reuses the SAME message object — ST doesn't reliably clear its
             // .extra for us. Without this, the guard right below would see the PREVIOUS
             // response's time label and skip recomputing for the new one entirely.
+            // Clearing it FIRST, before reading "the current time" below, also means
+            // getCurrentTime()'s own backward scan naturally lands on whatever came
+            // BEFORE this message — no separate rollback state to maintain for a
+            // reroll (see getCurrentTime()'s own doc comment).
             if ((type === 'regenerate' || type === 'swipe') && resolved.message.extra?.[TIME_EXTRA_KEY]) {
                 log(`Message #${resolved.index} was rerolled (type="${type}") — clearing its stale time label so it recomputes.`);
                 delete resolved.message.extra[TIME_EXTRA_KEY];
                 delete resolved.message.extra.stme_rp_time_data;
             }
             if (resolved.message.extra?.[TIME_EXTRA_KEY]) { log('Ignored — this message already has a time label.'); return; }
-            if (!request) { warn('Ignored — no pending SideCar request (GENERATION_STARTED never fired, or SideCar was not configured at that point).'); return; }
+            if (!host.sidecar.isConfigured()) { warn('MESSAGE_RECEIVED ignored — SideCar is not configured. Per-worker state:', host.sidecar.diagnostics()); return; }
             running = true;
             try {
-                const result = await request;
-                if (result?.error) throw result.error;
+                const built = buildTimeRequest(context.chat, settings, getCurrentTime(context, settings, resolved.index));
+                log(`MESSAGE_RECEIVED — sending SideCar request (profile "${settings.sidecarProfile}").`);
+                const result = await host.sidecar.request({ ...built, profileId: settings.sidecarProfile });
                 if (!appendTime(resolved.message, result, settings)) throw new Error('SideCar returned no usable time label.');
                 log(`Applying time label "${resolved.message.extra[TIME_EXTRA_KEY]}" to message #${resolved.index}.`);
-                setCurrentTime(context, resolved.message.extra[TIME_EXTRA_KEY]);
                 updateMessage(context, resolved.index, resolved.message);
                 setTimeout(() => {
                     const target = document.querySelector(`.mes[mesid="${resolved.message.mesid ?? resolved.index}"] .mes_text, #chat .mes[mesid="${resolved.message.mesid ?? resolved.index}"] .mes_text`);
@@ -214,7 +243,7 @@ export const timeModule = {
         };
         const changed = host.onChatChanged(refreshBadges);
         log('activate() complete.');
-        return () => { start(); received(); changed(); };
+        return () => { received(); changed(); };
     },
     render(container, host) {
         console.info('[STME:time]', 'render() called.');
@@ -231,6 +260,21 @@ export const timeModule = {
         profileSelect.addEventListener('change', () => { settings.sidecarProfile = profileSelect.value; host.saveModuleSettings(); });
 
         const startTimeInput = TextInput(startTime, { maxlength: 120 });
+        // A real report: a user edits a field, then closes/navigates away from the
+        // settings panel without the input ever cleanly losing focus first (common
+        // on mobile) — a save that only ever runs on 'change' (blur) never fires,
+        // and the edit is silently lost with no way to force it through. The 'input'
+        // listener below persists the RAW current value on every keystroke instead,
+        // so there's always something saved regardless of how the field is left;
+        // 'change' still runs the FULL normalizeTime() cleanup pass once the user
+        // is actually done, same as before. 'input' deliberately never calls
+        // startTime.set(...) — TextInput's own bind:value already keeps the signal
+        // (and what's on screen) in sync on every keystroke by itself; re-setting it
+        // here too would fight the user's own cursor position mid-type.
+        startTimeInput.addEventListener('input', () => {
+            settings.startTime = startTimeInput.value.slice(0, 120) || TIME_DEFAULTS.startTime;
+            host.saveModuleSettings();
+        });
         startTimeInput.addEventListener('change', () => {
             settings.startTime = normalizeTime(startTime.peek()) || TIME_DEFAULTS.startTime;
             startTime.set(settings.startTime);
@@ -260,6 +304,12 @@ export const timeModule = {
         const renderFieldRow = field => {
             const instruction = signal(field.instruction);
             const input = TextInput(instruction, { maxlength: MAX_INSTRUCTION_LENGTH, placeholder: 'How should SideCar format it? (optional)' });
+            // Same "don't rely on blur alone" fix as startTimeInput above — see its
+            // own comment for why. Raw save on every keystroke, full trim on blur.
+            input.addEventListener('input', () => {
+                field.instruction = input.value.slice(0, MAX_INSTRUCTION_LENGTH);
+                host.saveModuleSettings();
+            });
             input.addEventListener('change', () => {
                 field.instruction = instruction.peek().trim().slice(0, MAX_INSTRUCTION_LENGTH);
                 instruction.set(field.instruction);
@@ -273,6 +323,11 @@ export const timeModule = {
         };
 
         const displayInput = TextInput(displayTemplate, { placeholder: 'Year {year} · {time} · {period}' });
+        // Same "don't rely on blur alone" fix as startTimeInput/field rows above.
+        displayInput.addEventListener('input', () => {
+            settings.displayTemplate = displayInput.value;
+            host.saveModuleSettings();
+        });
         displayInput.addEventListener('change', () => {
             settings.displayTemplate = displayTemplate.peek().trim();
             displayTemplate.set(settings.displayTemplate);

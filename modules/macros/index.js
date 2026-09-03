@@ -1,4 +1,4 @@
-import { execute, DEFAULT_TIME_LIMIT_MS } from './language.js';
+import { execute, tokenize, parse, collectGetKeys, DEFAULT_TIME_LIMIT_MS } from './language.js';
 import {
     h, show, signal, computed, onDispose,
     Field, TextInput, TextArea, Toggle, Select, Button, DraggableList,
@@ -58,6 +58,31 @@ export function runProgram(host, program) {
     return `[macro error: ${program.name || program.macroName || program.id}]`;
 }
 
+/**
+ * Static dependency edges this module can honestly derive from its OWN config
+ * — see core/dependency-scanner.js. Parses every enabled `code` program (never
+ * runs it) and collects every `get "namespace:key"` it contains; a bareword
+ * key (no colon) is this program's own saved state, not a cross-module read,
+ * same split `runProgram()`'s own `get` binding makes. A program with a syntax
+ * error simply contributes no edges here — its own status channel already
+ * surfaces that error; this isn't the place to report it again.
+ */
+export function scanDependencies(programs) {
+    const edges = [];
+    for (const program of programs) {
+        if (program.kind !== 'code' || program.enabled === false) continue;
+        let ast;
+        try { ast = parse(tokenize(program.source)); }
+        catch { continue; }
+        for (const key of collectGetKeys(ast)) {
+            const colon = key.indexOf(':');
+            if (colon < 0) continue;
+            edges.push({ owner: key.slice(0, colon), kind: 'macro-get', detail: key });
+        }
+    }
+    return edges;
+}
+
 export const macrosModule = {
     id: MODULE_ID,
     title: 'Macros',
@@ -101,6 +126,7 @@ export const macrosModule = {
                 if (program.kind === 'text') host.data.set(program.id, String(program.source ?? ''));
                 registeredIds.add(program.id);
             }
+            host.data.set('dependencies', scanDependencies(settings.programs));
             log(`sync(): ${settings.programs.length} program(s) — ${registeredIds.size} active macro(s).`);
         };
         host.data.set('sync', sync);

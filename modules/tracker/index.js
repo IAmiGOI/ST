@@ -83,10 +83,22 @@ export function buildTrackerRequest(chat, block, currentState = {}) {
         .map(item => `${item.is_user ? 'Player' : 'Character'}: ${String(item.mes ?? '').slice(0, 900)}`)
         .join('\n\n');
 
+    // store.get() (store.js) returns EVERYTHING ever saved for this block,
+    // including a stale value from a field that's since been renamed or
+    // removed — store.set() never deletes those, by design (see its own doc
+    // comment: "stale keys ... are simply ignored rather than deleted", so a
+    // later restore/rename doesn't lose history). Filtering to just the
+    // block's CURRENTLY configured fields here, right before it goes into the
+    // prompt, applies that same whitelist discipline on the read side —
+    // otherwise "Known current values" would list fields that no longer
+    // exist, bloating the prompt and inviting SideCar to reference dead data.
+    const activeFieldNames = new Set(fields.map(field => field.name));
+    const activeState = Object.fromEntries(Object.entries(currentState ?? {}).filter(([key]) => activeFieldNames.has(key)));
+
     const vars = {
         fields: describeFields(fields),
         fieldsJson: fields.map(field => `"${field.name}"`).join(', '),
-        current: JSON.stringify(currentState ?? {}),
+        current: JSON.stringify(activeState),
         context,
     };
 

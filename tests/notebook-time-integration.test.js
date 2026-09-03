@@ -11,6 +11,11 @@ import { timeModule } from '../modules/time/index.js';
  * when both modules are live at once (this is what module-engine-compat.test.js's
  * own services suite already covers for the mechanism in general; this file is
  * specific to Notebook writing a note through the LLM function tool).
+ *
+ * RP Time's own "current time" is derived by scanning `context.chat` for the latest
+ * labeled character message (see modules/time/index.js's getCurrentTime() — there is
+ * no more separate chatMetadata scalar to set directly), so these tests populate a
+ * labeled message in `context.chat` instead of writing a chatMetadata key by hand.
  */
 function makeEngine() {
     let capturedTool = null;
@@ -26,6 +31,11 @@ function makeEngine() {
     return { engine, context, getTool: () => capturedTool };
 }
 
+/** The one real way RP Time's "current time" becomes non-default — a labeled character message already in the chat. */
+function seedCurrentTime(context, label) {
+    context.chat.push({ is_user: false, is_system: false, mes: 'Earlier reply.', extra: { stme_rp_time: label } });
+}
+
 test('a note written while RP Time is enabled gets stamped, through host.services — not by Notebook reading chatMetadata itself', async () => {
     const { engine, context, getTool } = makeEngine();
     engine.register(timeModule);
@@ -33,9 +43,9 @@ test('a note written while RP Time is enabled gets stamped, through host.service
     await engine.enable('time');
     await engine.enable('notebook');
 
-    // This is RP Time's OWN chatMetadata key (context.chatMetadata.stme_rp_time_current) —
-    // Notebook never reads it; it only ever goes through host.services.request('time').
-    context.chatMetadata.stme_rp_time_current = 'Day 2, 14:00 (Afternoon)';
+    // RP Time's own source of truth is the chat itself — Notebook never reads this
+    // directly; it only ever goes through host.services.request('time').
+    seedCurrentTime(context, 'Day 2, 14:00 (Afternoon)');
 
     const tool = getTool();
     const result = await tool.action({ action: 'write', title: 'Plan', content: 'Visit the observatory.' });
@@ -53,14 +63,14 @@ test('a note written while RP Time is disabled gets no timestamp at all', async 
     engine.register(notebookModule);
     await engine.enable('notebook'); // Time deliberately never enabled
 
-    context.chatMetadata.stme_rp_time_current = 'Day 2, 14:00 (Afternoon)'; // present but must be ignored — Time isn't active
+    seedCurrentTime(context, 'Day 2, 14:00 (Afternoon)'); // present in chat but must be ignored — Time isn't active
 
     const tool = getTool();
     await tool.action({ action: 'write', title: 'Plan', content: 'Visit the observatory.' });
 
     const notes = context.chatMetadata.stme_notebook_notes;
     assert.equal(notes.length, 1);
-    assert.equal(notes[0].timestamp, null, 'host.services.isAvailable("time") must be false while Time is disabled, regardless of stale chatMetadata');
+    assert.equal(notes[0].timestamp, null, 'host.services.isAvailable("time") must be false while Time is disabled, regardless of a labeled message already in chat');
 });
 
 test('a model-written duplicate leading time-line is stripped, and the real timestamp is stored separately', async () => {
@@ -69,7 +79,7 @@ test('a model-written duplicate leading time-line is stripped, and the real time
     engine.register(notebookModule);
     await engine.enable('time');
     await engine.enable('notebook');
-    context.chatMetadata.stme_rp_time_current = 'Day 2, 14:00 (Afternoon)';
+    seedCurrentTime(context, 'Day 2, 14:00 (Afternoon)');
 
     const tool = getTool();
     await tool.action({ action: 'write', title: 'Plan', content: 'Day 2, 14:00 (Afternoon)\nVisit the observatory.' });
@@ -85,7 +95,7 @@ test('disabling RP Time mid-session (service released) makes isAvailable false f
     engine.register(notebookModule);
     await engine.enable('time');
     await engine.enable('notebook');
-    context.chatMetadata.stme_rp_time_current = 'Day 2, 14:00 (Afternoon)';
+    seedCurrentTime(context, 'Day 2, 14:00 (Afternoon)');
 
     const tool = getTool();
     await tool.action({ action: 'write', title: 'Before', content: 'stamped one' });

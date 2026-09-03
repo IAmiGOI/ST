@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    tokenize, parse, run, execute,
+    tokenize, parse, run, execute, collectGetKeys,
     MacroSyntaxError, MacroRuntimeError, MacroTimeoutError,
 } from '../modules/macros/language.js';
 
@@ -206,4 +206,42 @@ test('a program with no return resolves to an empty string, not an error', () =>
 test('true/false render as the words "true"/"false"', () => {
     assert.equal(exec('return true'), 'true');
     assert.equal(exec('return false'), 'false');
+});
+
+// --- collectGetKeys() — static AST walk for core/dependency-scanner.js, via
+// modules/macros/index.js's scanDependencies(). Never runs the program.
+
+test('collectGetKeys finds a single top-level get', () => {
+    assert.deepEqual(collectGetKeys(parse(tokenize('return get "tracker:field:health"'))), ['tracker:field:health']);
+});
+
+test('collectGetKeys finds every get in a program, in source order, including duplicates', () => {
+    const ast = parse(tokenize('set a to get "x:1"\nset b to get "x:1" + get "y:2"\nreturn a'));
+    assert.deepEqual(collectGetKeys(ast), ['x:1', 'x:1', 'y:2']);
+});
+
+test('collectGetKeys reaches into if/repeat/while bodies and both branches of if/else', () => {
+    const ast = parse(tokenize(
+        'if get "a:1" > 0 then\nset x to get "b:2"\nelse\nset x to get "c:3"\nend\n' +
+        'repeat get "d:4" times\nset y to get "e:5"\nend\n' +
+        'while get "f:6" > 0\nset z to get "g:7"\nend\nreturn x',
+    ));
+    assert.deepEqual(collectGetKeys(ast).sort(), ['a:1', 'b:2', 'c:3', 'd:4', 'e:5', 'f:6', 'g:7'].sort());
+});
+
+test('collectGetKeys reaches into every kind of expression: negate, not, and/or, comparisons, arithmetic', () => {
+    const ast = parse(tokenize(
+        'set a to -get "x:1"\nset b to not get "x:2"\n' +
+        'set c to get "x:3" and get "x:4"\nset d to get "x:5" or get "x:6"\n' +
+        'set e to get "x:7" is get "x:8"\nset f to get "x:9" + get "x:10"\nreturn a',
+    ));
+    assert.deepEqual(collectGetKeys(ast).sort(), Array.from({ length: 10 }, (_, i) => `x:${i + 1}`).sort());
+});
+
+test('collectGetKeys returns an empty array for a program with no get at all', () => {
+    assert.deepEqual(collectGetKeys(parse(tokenize('return 1 + 1'))), []);
+});
+
+test('collectGetKeys returns bareword keys too (unfiltered) — the colon/bareword split is the caller\'s job, not this function\'s', () => {
+    assert.deepEqual(collectGetKeys(parse(tokenize('return get "count"'))), ['count']);
 });

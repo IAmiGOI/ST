@@ -61,6 +61,13 @@ export class ModuleDataBus {
     #pullTimers = new Map();
     #getContext;
     #onContaminate;
+    // Every ACCEPTED write, across every channel, reserved or not — for
+    // core/route-planner.js's activity observation. Deliberately separate from
+    // #listeners (which is per-channel and only for reserved/plain-key
+    // subscribers who care about ONE key's value): this is a wildcard, "tell me
+    // everything that happened" hook, so a caller doesn't need to know every
+    // channel id up front the way a per-channel subscribe() would require.
+    #globalListeners = new Set();
 
     constructor({ getContext, onContaminate } = {}) {
         this.#getContext = getContext;
@@ -96,6 +103,17 @@ export class ModuleDataBus {
         listeners.add(listener);
         this.#listeners.set(id, listeners);
         return () => { listeners.delete(listener); if (!listeners.size) this.#listeners.delete(id); };
+    }
+
+    /**
+     * Fires on every ACCEPTED write to any channel, reserved or not — a
+     * contaminated (rejected) write never reaches this, same as it never
+     * reaches #values or a per-channel listener. `listener({ namespace, key,
+     * writerNamespace, value, at })`. Returns an unsubscribe function.
+     */
+    onAnyWrite(listener) {
+        this.#globalListeners.add(listener);
+        return () => this.#globalListeners.delete(listener);
     }
 
     /**
@@ -258,6 +276,7 @@ export class ModuleDataBus {
         for (const listener of [...(this.#listeners.get(id) ?? [])]) listener(value);
         if (channel?.persist) this.#writePersisted(id, value);
         if (channel?.webhook?.pushUrl) this.#pushWebhook(channel, value);
+        for (const listener of [...this.#globalListeners]) listener({ namespace, key, writerNamespace, value, at: Date.now() });
         return true;
     }
 

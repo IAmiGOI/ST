@@ -36,7 +36,7 @@ export function createDevPanel(engine) {
     effectOn(panel, () => { panel.classList.toggle('stme-dev-panel-collapsed', collapsed()); persist(); });
     effectOn(body, () => {
         refreshTick();
-        body.replaceChildren(renderModulesSection(engine), renderChannelsSection(engine), renderLogSection(engine));
+        body.replaceChildren(renderStateTrackSection(engine), renderModulesSection(engine), renderChannelsSection(engine), renderLogSection(engine));
     });
 
     function persist() {
@@ -57,6 +57,36 @@ export function createDevPanel(engine) {
         hide: () => visible.set(false),
         dispose: () => { unmakeDraggable(); panel.remove(); },
     };
+}
+
+/**
+ * State-Track's two published channels ('state-track:main' / ':sidecars', see
+ * core/state-track.js), rendered readably instead of via the generic 80-char
+ * JSON preview renderChannelsSection below already gives every bus channel —
+ * an array of worker objects reads as noise there. This is Phase 1's whole
+ * point made visible: what the main LLM and every SideCar worker are doing
+ * right now, at a glance.
+ */
+function renderStateTrackSection(engine) {
+    const main = engine.bus.get('state-track', 'main') ?? { phase: 'idle', lastOutcome: null, toolCallsInCycle: 0 };
+    const sidecars = engine.bus.get('state-track', 'sidecars') ?? [];
+    const phaseBadge = main.phase === 'generating' ? 'on' : main.phase === 'stopped' ? 'error' : 'off';
+    const outcomeLabel = main.lastOutcome ? ` · last: ${main.lastOutcome}` : '';
+    const toolCallsLabel = main.toolCallsInCycle ? ` · ${main.toolCallsInCycle} tool call(s)` : '';
+    return h('section', { class: 'stme-dev-section' },
+        h('h4', {}, 'State-Track'),
+        h('div', { class: 'stme-dev-table' },
+            h('div', { class: 'stme-dev-row' },
+                h('span', { class: 'stme-dev-row-title' }, 'Main LLM', h('code', {}, 'generation')),
+                h('span', { class: `stme-dev-badge stme-dev-badge-${phaseBadge}` }, `${main.phase}${outcomeLabel}${toolCallsLabel}`),
+            ),
+            ...sidecars.map(worker => h('div', { class: 'stme-dev-row' },
+                h('span', { class: 'stme-dev-row-title' }, worker.name, h('code', {}, worker.id)),
+                h('span', { class: `stme-dev-badge stme-dev-badge-${worker.status === 'requesting' ? 'on' : worker.lastOutcome === 'failed' ? 'error' : 'off'}` },
+                    worker.status === 'requesting' ? 'requesting' : worker.lastOutcome ? `idle · last: ${worker.lastOutcome}` : worker.configured ? 'idle' : 'not configured'),
+            )),
+        ),
+    );
 }
 
 function renderModulesSection(engine) {

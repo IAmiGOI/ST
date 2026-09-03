@@ -42,6 +42,31 @@ test('SideCar sends an OpenAI-compatible request and module leases release clean
     } finally { globalThis.fetch = originalFetch; }
 });
 
+test('SideCar omits frequency_penalty from the OpenAI-compatible request body when it\'s at its default (0) — some endpoints reject unrecognized/default sampler params', async () => {
+    const { service } = createService();
+    service.update({ enabled: true, endpoint: 'https://example.test/v1', model: 'small' }); // frequencyPenalty left at its default, 0
+    const originalFetch = globalThis.fetch;
+    let body;
+    globalThis.fetch = async (_url, options) => { body = JSON.parse(options.body); return { ok: true, json: async () => ({ choices: [{ message: { content: 'OK' } }] }) }; };
+    try {
+        await service.request({ prompt: 'test' });
+        assert.equal('frequency_penalty' in body, false);
+    } finally { globalThis.fetch = originalFetch; }
+});
+
+test('SideCar includes frequency_penalty once it\'s actually changed from its default', async () => {
+    const { service } = createService();
+    service.update({ enabled: true, endpoint: 'https://example.test/v1', model: 'small' });
+    service.profile('default').frequencyPenalty = 0.5;
+    const originalFetch = globalThis.fetch;
+    let body;
+    globalThis.fetch = async (_url, options) => { body = JSON.parse(options.body); return { ok: true, json: async () => ({ choices: [{ message: { content: 'OK' } }] }) }; };
+    try {
+        await service.request({ prompt: 'test' });
+        assert.equal(body.frequency_penalty, 0.5);
+    } finally { globalThis.fetch = originalFetch; }
+});
+
 test('SideCar rejects incomplete configuration and empty requests', async () => {
     const { service } = createService();
     await assert.rejects(service.request({ prompt: 'hello' }), /not configured/);

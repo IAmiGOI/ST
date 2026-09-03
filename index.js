@@ -15,6 +15,12 @@ import { macrosModule } from './modules/macros/index.js';
 // (the real entry point ST imports) can supply via import.meta.url.
 const EXTENSION_NAME = deriveExtensionName(import.meta.url);
 const EXTENSION_IS_GLOBAL = isGlobalInstall(import.meta.url);
+// This extension's own root — the ONLY thing index.js passes to ModuleEngine's
+// constructor beyond getContext. Lets DependencyScanner's scanServiceContracts()
+// (via ModuleEngine's #moduleSourceUrl) fetch a BUILT-IN module's own raw source
+// (e.g. `${BASE_URL}modules/tracker/index.js`) the same way it already can for an
+// externally-loaded module's known sourceUrl — see core/dependency-scanner.js.
+const BASE_URL = new URL('.', import.meta.url).href;
 // Guards against a reload loop: after an automatic attempt, a fresh one is skipped
 // for a short cooldown — long enough to survive one full check+apply+reload cycle
 // (network calls, a git pull, the reload itself) so a broken update can't loop
@@ -150,7 +156,7 @@ function logUpdateDiagnostic(status) {
 }
 
 async function init() {
-    const engine = new ModuleEngine(getContext);
+    const engine = new ModuleEngine(getContext, BASE_URL);
     engine.register(notebookModule);
     engine.register(timeModule);
     engine.register(trackerModule);

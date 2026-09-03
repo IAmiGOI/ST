@@ -546,6 +546,352 @@ const profiles = host.sidecar.profiles(); // [{ id, name }, ...]
 
 Reasoning fields for OpenRouter only apply when the endpoint contains `openrouter.ai`.
 
+## State-Track: what's happening right now
+
+`core/state-track.js` observes what the main chat LLM and every SideCar worker are
+CURRENTLY doing and republishes it onto the shared bus, namespace `state-track`, keys
+`main` and `sidecars`. Phase 1 only — pure observation, no behavior change; a module can
+read "is anything busy right now" and react, but nothing here decides what runs or in
+what order yet. That's the deliberately deferred next phase (see the end of this
+section).
+
+Lives inside `ModuleEngine` itself (`engine.stateTrack`, constructed and `start()`-ed
+alongside `SidecarManager` — the same reasoning
+[Independent core services](#independent-core-services) gives for why `host.sidecar`
+stays inside the engine rather than becoming a sibling like `LorebookService`: tracking
+what the engine's own shared model connections are doing is intrinsic to what
+`ModuleEngine` already does for every module.
+
+### Main-LLM generation state (`MainLlmStateTrack`)
+
+Built from real ST events — confirmed against ST's own source, not guessed:
+`GENERATION_STARTED` / `GENERATION_STOPPED` / `GENERATION_ENDED`,
+`TOOL_CALLS_PERFORMED`, and `MESSAGE_RECEIVED`/`CHARACTER_MESSAGE_RENDERED` as the "did a
+reply actually land" signal. `phase` is one of `idle` / `generating` / `stopped`;
+`lastOutcome` (`'success'` / `'failed'` / `'stopped'` / `null`) is sticky until the next
+cycle starts; `toolCallsInCycle` counts tool calls seen during the current cycle.
+
+Two things ST's own events don't give for free, which is the actual reason this class
+exists rather than a one-line event listener:
+
+- **`GENERATION_ENDED` fires identically on success and on a failed/errored
+  generation** — ST does not distinguish them at the event level. There's no
+  authoritative "it failed" signal to listen for. The workaround is a grace window
+  (`OUTCOME_GRACE_MS`, 2000ms default, injectable for tests): after `GENERATION_ENDED`,
+  wait that long for a real message to have shown up (tracked via
+  `MESSAGE_RECEIVED`/`CHARACTER_MESSAGE_RENDERED`); if one did, `lastOutcome: 'success'`,
+  otherwise `'failed'`. A heuristic, not a guarantee — flagged as such rather than
+  presented as certain.
+- **A tool call happens mid-generation, not after it.** `TOOL_CALLS_PERFORMED` only
+  records that it happened (`toolCallsInCycle` increments) — it never itself changes
+  `phase`. This is the actual guardrail behind "the tracker must not get lost": without
+  it, a naive implementation reacting to every message/tool event risks flipping back to
+  `idle` on an intermediate tool-result message while the model is still actually
+  generating. `MESSAGE_RECEIVED` deliberately only sets an internal "a message showed up
+  this cycle" flag for the same reason — the phase transition always waits for the one,
+  real `GENERATION_ENDED` (or `GENERATION_STOPPED`) that marks the true end of the cycle,
+  no matter how many intermediate message events fire along the way.
+- **A newer cycle starting cancels a stale grace-window timer instead of letting it
+  misattribute its outcome** — the same "stale timer, cancel instead of misattribute"
+  shape as the [Tracker/RP Time SideCar race](#tracker-data-bus-macros-and-floating-panel)
+  this codebase already knows about elsewhere (that one's own fix, cancelling via
+  `AbortSignal`, is still a separate, not-yet-implemented piece of work).
+
+### SideCar worker state (`SidecarManager.workerStates()`)
+
+Extends the manager's existing `#running`/queue bookkeeping with a small per-worker
+status map, updated at the same points `#pump()` already dispatches/settles a request:
+`status` (`'idle'` / `'requesting'`, live — right now) and `lastOutcome`/`lastError`/
+`lastAt` (sticky from the most recently completed request until the next one overwrites
+them) — the same live-vs-sticky split `MainLlmStateTrack` uses for `phase` vs.
+`lastOutcome`, so both halves of State-Track read the same way. The zero-priority main-
+LLM fallback (`requestFallback()`/`MainLlmService`) is deliberately NOT included here —
+it's explicit-call-only, never part of the worker pool this is tracking.
+
+### Where it shows up
+
+Both channels are visible in the **ModuleEngine Developer** floating panel — a dedicated
+"State-Track" section renders them readably (a badge per worker/main-LLM phase) rather
+than relying on the generic 80-char JSON preview the panel's own "Bus channels" section
+already gives every reserved channel (fine for `main`, unreadable for an array of worker
+objects). Any module can also read them directly: `host.data.read('state-track', 'main')`
+/ `host.data.subscribe('state-track', 'sidecars', ...)`, same as any other bus channel.
+
+### Dependency Scanner (Phases 2a/2b/2c/2d): a static graph of what COULD depend on what
+
+**This whole system is intentionally backend-only, with no UI wired to it yet** —
+same convention `core/module-catalog.js` already established. Confirmed explicitly
+after all four phases shipped, not just carried over by default: the graph is real and
+tested, but nothing surfaces it in the Dev Panel (unlike State-Track's own dedicated
+section) or anywhere else in the extension's UI.
+
+`core/dependency-scanner.js`'s `DependencyScanner` is the next layer up from State-Track,
+and deliberately a different shape: not runtime observation ("what did a module actually
+read just now"), but a STATIC graph built by **parsing each module's own config**,
+aggregated generically. The engine has no special knowledge of any one module here —
+same principle `host.services` already relies on: any module MAY
+`host.data.set('dependencies', edges)` in its own namespace (a plain, unreserved key,
+same convention Macros' own `'sync'` function value already uses), where `edges` is
+`[{ owner, kind, detail? }, ...]`; `DependencyScanner.edges()` just aggregates whatever
+every module happens to have published, generically, into
+`{ consumer, owner, kind, detail }` rows (`dependenciesOf(id)` / `dependentsOf(id)` for
+the two directions). No `start()`, no subscriptions — reading already-published bus
+values is cheap enough to just recompute fresh on every call.
+
+**Why parsing instead of runtime observation** (the design this replaced): an earlier
+draft of this instrumented `host.data.read`/`host.services.request` themselves to build
+the graph from what modules actually touched. Rejected in favor of parsing because a
+purely-observed graph is only ever as complete as what's actually been exercised so
+far in the running session — a conditional branch never taken yet is invisible to it.
+Parsing each module's own already-structured config (not arbitrary JS source) gets the
+full graph of possibilities up front, without executing anything.
+
+**The first publisher — Macros** (`modules/macros/index.js`'s `scanDependencies()`,
+called from `sync()` on every settings change): parses every enabled `kind: 'code'`
+program via `language.js`'s real tokenizer/parser (never runs it) and walks the AST —
+`language.js`'s own `collectGetKeys(ast)`, mirroring `run()`'s own
+`evalExpr`/`execStatement` switch structure — collecting every string a `get "..."`
+expression reads, anywhere in the program (including inside `if`/`repeat`/`while`
+bodies). A key containing a colon (`"tracker:field:vitals:health"`) is a cross-module
+bus read — split on the FIRST colon into `owner`/rest, same split
+`runProgram()`'s own `get` binding already makes; a bareword key (`"count"`) is the
+program's own saved state, not a dependency, and is dropped. A program with a syntax
+error simply contributes no edges (its own status channel already surfaces that error
+— this isn't the place to report it a second time).
+
+**The second source — webhook pulls/pushes** (`DependencyScanner`'s own
+`#webhookEdges()`, no per-module publishing needed at all): derived directly from
+every module's reserved channels' `webhook` config — already generic bus metadata via
+`listChannels()`/`describe()`. `pull` and `push` are opposite directions (pull = this
+channel's value depends on an external source; push = this channel notifies an
+external system, an outbound effect, not a dependency) and get distinct `kind`s
+(`webhook-pull`/`webhook-push`) so a consumer of the graph can tell them apart. Both
+are owned by a generic `external:<hostname>` pseudo-node — never a real module id, and
+deliberately only the bare hostname (a webhook URL can carry a token/key in its query
+string, which has no business ending up in a graph that may surface in the dev panel
+or logs). An external HTTP endpoint isn't something a future director would need to
+sequence relative to generation — it polls/gets pushed to on its own schedule,
+independent of any generation cycle.
+
+**The third source — service contracts** (`scanServiceContracts()`, async, called once
+from `ModuleEngine.start()`, fire-and-forget like `checkHealth()` — never blocks boot):
+regex-parses every module's own RAW SOURCE TEXT for `host.services.register/request/
+get/ask('name')` literal calls. This is genuine parsing, not a declared/trusted claim
+— possible because this project ships with no build step, so every module's file
+(built-in or externally-loaded) is plain, fetchable text at a real URL:
+`ModuleEngine`'s private `#moduleSourceUrl(id)` resolves an externally-loaded module's
+already-known `sourceUrl` (same one `checkModuleUpdateAvailable()` re-resolves), or
+falls back to `${baseUrl}modules/<id>/index.js` for a built-in one (`baseUrl` —
+`new URL('.', import.meta.url).href` — is the one thing `index.js` passes into
+`ModuleEngine`'s constructor beyond `getContext`). Building the provider map first
+(every `register('name')` match, across every module) then resolving each consumed
+name against it — a consumed name nobody registers still becomes an edge, owned by a
+`service:<name>` pseudo-node (visible, not dropped, same idea as `external:<host>`
+above), since "wants a service that doesn't exist" is itself useful information (a
+typo, or a provider not scanned yet).
+
+Unlike the two sources above, this can't be recomputed fresh+cheap on every `edges()`
+call — it means fetching every module's source over the network — so it's scanned
+once and cached in `#serviceEdges` until the next explicit scan, merged into `edges()`
+alongside the always-fresh sources.
+
+Real, honest limitations, stated rather than hidden: only a LITERAL string argument is
+found (`host.services.request(someVar)` is invisible — same limitation the existing
+`version` field regex in `module-engine.js` already accepts); it assumes the host
+parameter is actually named `host` (the one convention every module contract in this
+codebase already follows); the call can span multiple lines
+(`host.services\n    .ask(...)`, real formatting this codebase's own Music module
+uses) — the regex tolerates whitespace between `host.services` and the method name for
+exactly that reason, confirmed against a real smoke test in
+`tests/dependency-scanner.test.js` that scans this repo's actual built-in module files
+and checks for the real `music->tracker` and `notebook->time` edges (a REAL gap this
+smoke test caught on first pass, before the whitespace-tolerant fix: a single-line-only
+regex silently missed Music's own real, already-existing dependency on Tracker).
+
+**The fourth source — activation conditions** (`scanActivationConditions()`, its own
+async fetch pass, also fire-and-forget from `ModuleEngine.start()` — deliberately NOT
+folded into `scanServiceContracts()`'s own fetch, a simplicity-over-micro-optimization
+choice for a handful of small files fetched once per boot): regex-parses the same kind
+of module source for a different question — not "who does this module talk to," but
+"what triggers it, and does it read outside its own namespace":
+
+- `host.onEvent('NAME', ...)` → `{kind: 'event-subscription', owner: 'st-event:NAME'}`
+  — an ST event isn't owned by any module, hence the `st-event:` pseudo-node (same
+  idea as `external:<host>`/`service:<name>` above).
+- `host.onChatChanged(...)` → the same shape, owner `'st-event:CHAT_CHANGED'` (ST's
+  real event name for it), detected by presence rather than a captured argument.
+- `host.data.read/subscribe('namespace', ...)` where `namespace` isn't the module's
+  own id → `{kind: 'data-read', owner: namespace}` — a REAL namespace this time, not a
+  pseudo-node (there's a real thing on the other end: another module's bus data, or
+  `state-track` specifically).
+- `host.data.write('namespace', ...)` (only meaningful against a channel reserved with
+  `allowExternalWrite: true`) → the same shape, one level up: `{kind: 'data-write',
+  owner: namespace}` — the opposite direction from `data-read` (reaching INTO another
+  namespace to write, not just observing it), its own `kind` so a future consumer can
+  tell read-only dependence from a write reaching across a module boundary. Added
+  during a later structural review of this whole system, for consistency with the
+  already-made "any literal namespace" call above — not part of the original build.
+
+  No built-in module does either `data-read` or `data-write` today — everything
+  cross-module goes through `host.services` by convention (confirmed by grep both when
+  this was first built and again during that later review) — so both exist for
+  third-party/future modules and to make a future State-Track dependency actually
+  visible once something reads it.
+
+Separately, `activationInfo(id)` — **synchronous, deliberately NOT part of `edges()`**
+— returns `{ defaultEnabled, minEngineVersion }`: real per-module metadata already
+sitting in memory (`ModuleEngine`'s own `#modules` Map, handed to `DependencyScanner`'s
+constructor as a third `getModuleMeta` accessor), needing no parsing/fetching at all.
+Kept out of `edges()` on purpose — neither field is a "depends on another module"
+relationship, and forcing them into the edge shape just to reuse one abstraction for
+two different kinds of fact would be a stretch, not a simplification.
+
+Also still fully open (a genuine, unresolved design question, not an implementation
+gap — none of Phases 2a-2d answer it): what "runs in parallel with generation" vs.
+"runs after generation ends" actually means STRUCTURALLY for a future director
+consuming this graph — the ordering example that originally motivated this whole
+phase (module Г, consuming a request into module A's service, must run after A while
+both run parallel with generation; module B, consuming both, must run after them AND
+after generation ends) is answered by Phases 2a-2d only for the "who depends on whom"
+half, never the "when relative to generation" half.
+
+### Route Planner (Phase 3): the dynamic layer — watching which direction the graph moves
+
+`core/route-planner.js`'s `RoutePlanner` is the next layer up from the static Dependency
+Scanner above — not "what COULD depend on what" any more, but "given what's actually
+been observed happening, what should a module wanting to act RIGHT NOW do about it."
+`engine.routePlanner` is live and accumulating real pass counts from real usage from the
+moment `ModuleEngine.start()` runs.
+
+**Three milestone nodes, and only these three** (a closed set, confirmed with the user —
+not every ST event): generation-started, a tool call performed, and generation-ended.
+These reuse the exact `st-event:<NAME>` pseudo-node naming Phase 2d already
+established (`MILESTONE.GENERATION_STARTED` = `'st-event:GENERATION_STARTED'`, etc.)
+rather than inventing a second vocabulary for the same idea. Their "reached or not, right
+now" state needed no new instrumentation at all — `core/state-track.js` already publishes
+`phase`/`toolCallsInCycle`/`lastOutcome` reactively on `state-track:main`; `RoutePlanner`
+just reads that.
+
+**Observation mechanism**: `bus.onAnyWrite(listener)` (`core/data-bus.js`, new) — fires on
+every ACCEPTED write to any channel, reserved or not (a rejected/contaminated write never
+reaches it, same as it never reaches a per-channel listener), with `{ namespace, key,
+writerNamespace, value, at }`. A module's own bus write is treated as evidence "this
+module did something," tagged with whichever milestone was current at that instant.
+Deliberately NOT wrapping `host.services`/`host.data` at their call sites — that was the
+original "runtime observation" idea Round 1 of the Dependency Scanner's own design
+explicitly rejected as the source of the STATIC graph (see that section above); reusing
+bus writes here keeps this dynamic layer built from the same non-invasive primitive
+rather than reopening that decision for a different reason.
+
+**Probability**: a plain Laplace-smoothed pass counter per module —
+`(afterGeneration + 1) / (afterGeneration + duringGeneration + 2)` — no ML, same
+"small and honest" philosophy as the macro language and the diagnostic regex parsers
+elsewhere in this codebase. Starts at exactly 0.5 (maximally uncertain) before any
+evidence exists — which is itself a real problem the `minEvidence` guard below exists
+to solve.
+
+**The cost model — compares EXPECTED cost, not raw probability.** The user's own worked
+example, reproduced as a real test: even at a 70%/30% split favoring "fine to act now,"
+acting now can still be the wrong choice, because the two branches' costs are wildly
+asymmetric — waiting when you didn't need to costs a small, roughly fixed delay
+(`waitCost`, default 1.5 arbitrary units); acting when you should have waited risks a
+not-cleanly-reversible mistake (state written mid-generation, before the real final
+outcome was known — the same class of problem as the already-documented Tracker/Time
+SideCar race condition), `severeCost` (default 20 — deliberately an order of magnitude
+past `waitCost`, not just "somewhat bigger"). `expectedCost = probability × cost`; the
+LOWER expected cost wins:
+
+```
+expectedCostOfWaiting     = (1 − probabilityAfterGeneration) × waitCost
+expectedCostOfActingNow   =      probabilityAfterGeneration  × severeCost
+```
+
+`decide(moduleId, { waitCost, severeCost, minEvidence })` returns one of two shapes (each
+carrying the numbers it was actually computed from, for tests and for a human reading a
+log to see WHY, not just what):
+- `{ decision: 'proceed' }` — acting now is cheaper in expectation (or, below
+  `minEvidence` total observed passes — default 6 — this is returned unconditionally,
+  tagged `reason: 'insufficient-evidence'`: a brand-new module starts at
+  `probabilityAfterGeneration = 0.5`, which at the default cost ratio ALREADY favors not
+  proceeding — wired in unconditionally, that would needlessly delay/reroute every
+  module's first few requests, including one with no real timing ambiguity at all, like
+  this project's own Tracker/Time/Music, purely from cold-start uncertainty. An
+  unambiguous module's own real evidence reliably pushes its probability toward 0 well
+  before `minEvidence` passes accumulate, so this guard only ever suppresses noise).
+- `{ decision: 'wait', for: MILESTONE.GENERATION_ENDED }` — waiting is cheaper in
+  expectation.
+
+**`decide()` answers a pure TIMING question — it does NOT pick a worker, and it never
+did in the shipped version**, though an earlier draft got this wrong: it also offered a
+`'reroute'` outcome, reasoning that an idle second SideCar worker was a substitute for
+waiting. A real end-to-end test (`tests/route-planner-sidecar-integration.test.js`,
+`SidecarManager` + `RoutePlanner` together, no mocks) caught the bug immediately: with
+only one configured worker, that worker is trivially "idle" whenever nothing else is
+running, so `decide()` would reroute to it — i.e. dispatch immediately — completely
+bypassing the wait it had just decided was needed. Rerouting to a different worker never
+changes WHETHER it's correct to act yet, only WHERE the (still equally premature) work
+would run. Fixed by splitting the two questions apart:
+
+- `decide()` → timing only, `'proceed'` or `'wait'`, worker availability irrelevant.
+- `pickIdleWorker()` → a separate method, a configured+idle worker or `null`. Consulted
+  by `SidecarManager.request()` (see below) ONLY once a real `wait` has already resolved
+  — never as a substitute for it, only to skip the normal queue at that point if
+  something is free right then.
+
+### Phase 4: wiring decisions into real execution — `SidecarManager.request()`
+
+The one place in this codebase where `RoutePlanner`'s decision actually changes real
+behavior — chosen deliberately as a SINGLE centralized integration point (every SideCar
+request from every module already passes through `SidecarManager.request()`) rather than
+touching each module's own request-timing code individually. `SidecarManager`'s
+constructor takes a 4th, optional, lazily-called argument, `getRoutePlanner` (a function,
+not a direct reference — needed because `RoutePlanner` is itself constructed FROM a
+`SidecarManager` instance, so a direct reference would be circular; a function only
+CALLED later, once both objects exist, isn't). Omit it (every pre-existing caller/test
+does) and `request()` is byte-for-byte its original behavior — `decide()` never runs.
+
+```
+request()
+  ├─ routePlanner.decide(moduleId)
+  │    ├─ 'proceed' (or no route planner at all) → today's original behavior, unchanged
+  │    └─ 'wait' → await routePlanner.waitFor(milestone)   (bounded — see below)
+  │                  then: routePlanner.pickIdleWorker()
+  │                    ├─ found  → dispatch straight to it, skipping the normal queue
+  │                    └─ none   → falls into the normal queue, same as 'proceed'
+```
+
+A `'wait'` decision only ever delays the ONE request that triggered it — every other
+already-queued or concurrently-arriving request, from any module, is completely
+unaffected (proven directly:
+`tests/sidecar-manager.test.js`'s *"a 'wait' decision on one module's request does not
+block a concurrent request from another module"*).
+
+`RoutePlanner.waitFor(milestone, { timeoutMs = 15000 })` resolves immediately (no
+subscription at all) if the milestone is already current, otherwise subscribes to
+`state-track:main` and resolves the instant it becomes current — or after `timeoutMs`,
+whichever comes first. Never rejects, never waits forever, even if the milestone never
+actually arrives (a wrong probability estimate, a stopped/failed generation, a module
+simply mistaken about needing to wait at all).
+
+**What's still deliberately NOT built**: the Tier-1 "module ran out of order but it's
+recoverable via rollback" mechanic from the original risk-tier design discussion is still
+a stub — the cost model accounts for a severe (Tier-2, phase-boundary) mistake, not yet a
+moderate (Tier-1, module-ordering) one. And no BUILT-IN module today actually has
+genuinely ambiguous timing (confirmed by design before this phase was built — Time/
+Tracker/Music are all deterministically triggered by known ST events already), so this
+wiring has no observable effect on any of them right now; it's proven end-to-end against
+a deliberately fabricated "demo" module with real, taught-not-mocked ambiguous history
+instead (see `tests/route-planner-sidecar-integration.test.js`).
+
+### What's deliberately NOT built yet
+
+`RoutePlanner.decide()`'s output IS now wired into real execution — see "Phase 4" just
+above — so this is no longer "nothing acts on the graph." What's still open: the Tier-1
+rollback mechanic (a stub — see above); and, as already noted, none of this project's own
+built-in modules currently have real timing ambiguity for the wiring to actually change
+anything about — its value today is the tested, working mechanism itself, ready for a
+module (built-in or third-party) that actually needs it.
+
 ## `host.services`: services modules provide to each other
 
 `host.sidecar` is access to an LLM, built into the engine. `host.services` is the same

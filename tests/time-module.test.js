@@ -49,7 +49,7 @@ test('RP Time builds the SideCar prompt from the field list — one source of tr
     assert.match(request.systemPrompt, /"day", "time"/);
     assert.match(request.systemPrompt, /Day 1, 08:00/);
     assert.match(request.prompt, /Player: We leave at dawn/);
-    assert.match(request.prompt, /character is about to respond/);
+    assert.match(request.prompt, /character just responded/);
 });
 
 test('RP Time changes only the message tail and never appends twice', () => {

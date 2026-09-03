@@ -389,3 +389,47 @@ export function execute(source, options = {}) {
         return { ok: false, error: error instanceof Error ? error : new Error(String(error)) };
     }
 }
+
+function visitExpr(node, keys) {
+    if (!node) return;
+    switch (node.type) {
+        case 'Get': keys.push(node.key); return;
+        case 'Negate': case 'Not': visitExpr(node.value, keys); return;
+        case 'Logical': case 'Compare': case 'Binary': visitExpr(node.left, keys); visitExpr(node.right, keys); return;
+        default: return; // Number/String/Boolean/Var — leaves, nothing to collect
+    }
+}
+
+function visitStatements(statements, keys) {
+    for (const statement of statements) {
+        switch (statement.type) {
+            case 'Set': case 'Save': case 'Return': visitExpr(statement.value, keys); break;
+            case 'If': visitExpr(statement.test, keys); visitStatements(statement.consequent, keys); visitStatements(statement.alternate, keys); break;
+            case 'Repeat': visitExpr(statement.count, keys); visitStatements(statement.body, keys); break;
+            case 'While': visitExpr(statement.test, keys); visitStatements(statement.body, keys); break;
+        }
+    }
+}
+
+/**
+ * Every string literal a `get "..."` expression reads anywhere in this program
+ * — including inside if/repeat/while bodies and nested expressions — without
+ * running it. Mirrors run()'s own evalExpr/execStatement switch structure
+ * exactly, so the two stay easy to compare by eye if the grammar ever grows.
+ *
+ * Purely static: a program with a genuinely infinite structure can't exist
+ * here (parse() already produced a finite tree — there's no macro-level
+ * recursion or loops-over-the-AST-itself, only the runtime `repeat`/`while`
+ * loops run() executes, which this never runs). Used by
+ * core/dependency-scanner.js (via modules/macros/index.js) to build a static
+ * "what could this macro depend on" graph without executing any program —
+ * see MODULES.md's State-Track section for why: modules/macros/index.js's own
+ * `get` binding treats a colon-containing key as a cross-module bus read
+ * (`"tracker:field:vitals:health"`) and a bareword as this program's own saved
+ * state — the same split callers of this function need to make themselves.
+ */
+export function collectGetKeys(ast) {
+    const keys = [];
+    visitStatements(ast.statements, keys);
+    return keys;
+}

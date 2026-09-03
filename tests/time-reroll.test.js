@@ -6,14 +6,18 @@ import { timeModule } from '../modules/time/index.js';
  * Regression coverage for: a reroll (regenerate, or swiping to a new response) used
  * to never update the RP time — 'regenerate'/'swipe' were excluded message types, AND
  * even once un-excluded, the reused message object's stale .extra would still block
- * recomputation without the explicit clear added alongside this. Also covers the
- * related "stuck pending" bug: dropping an excluded message type used to leave the
- * pending SideCar request in place, silently blocking the NEXT real generation too.
+ * recomputation without the explicit clear added alongside this.
+ *
+ * The module now triggers entirely from MESSAGE_RECEIVED (post-generation — see
+ * MODULES.md/the memory note on why GENERATION_STARTED was dropped); there's no more
+ * "pending request started earlier" to race against or leak across messages, so the
+ * old "stuck pending" regression this file also used to cover no longer has a
+ * mechanism to happen through at all.
  *
  * timeModule.activate() only touches `document` lazily, inside renderBadge() — once a
  * message is actually processed — never during setup, so a trivial stub (just enough
  * for renderBadge()'s "no chat DOM target, do nothing" path) is enough to drive a full
- * GENERATION_STARTED -> MESSAGE_RECEIVED round trip without a real DOM/jsdom.
+ * MESSAGE_RECEIVED round trip without a real DOM/jsdom.
  */
 const originalDocument = globalThis.document;
 globalThis.document = { querySelector: () => null };
@@ -49,8 +53,6 @@ function makeHost(chat) {
 }
 
 async function roundTrip(listeners, messageId, type) {
-    listeners.GENERATION_STARTED();
-    await new Promise(resolve => setTimeout(resolve, 10));
     await listeners.MESSAGE_RECEIVED(messageId, type);
     await new Promise(resolve => setTimeout(resolve, 10));
 }
@@ -98,7 +100,7 @@ test('an excluded type ("continue") still does not apply a label to that message
     assert.equal(chat[0].extra.stme_rp_time, undefined);
 });
 
-test('an excluded type does not leave the pending request stuck — the NEXT real generation still works', async () => {
+test('an excluded type for one message does not block a later, unrelated, real generation for a different message', async () => {
     const chat = [
         { is_user: false, is_system: false, mesid: 0, mes: 'Continued reply.', extra: {} },
         { is_user: false, is_system: false, mesid: 1, mes: 'A brand new reply.', extra: {} },
@@ -106,13 +108,27 @@ test('an excluded type does not leave the pending request stuck — the NEXT rea
     const { host, listeners } = makeHost(chat);
     await timeModule.activate(host);
 
-    // First: an excluded type fires and must be dropped cleanly, not left pending.
     await roundTrip(listeners, 0, 'continue');
     assert.equal(chat[0].extra.stme_rp_time, undefined);
 
-    // Second: a completely unrelated, real generation for a DIFFERENT message —
-    // this must still send its own request and apply its own result, not be skipped
-    // because a stale pending request from the "continue" above was left in place.
     await roundTrip(listeners, 1, 'normal');
     assert.equal(chat[1].extra.stme_rp_time, 'Day 2, 09:00 (Morning)', 'tracking must not be silently broken by an earlier excluded-type message');
+});
+
+test('a reroll\'s own request uses the time BEFORE this message, not its own now-cleared label — no separate rollback state needed', async () => {
+    const chat = [
+        { is_user: false, is_system: false, mesid: 0, mes: 'Earlier reply.', extra: { stme_rp_time: 'Day 1, 08:00 (Morning)' } },
+        { is_user: false, is_system: false, mesid: 1, mes: 'Rerolled reply.', extra: { stme_rp_time: 'Day 5, 20:00 (Night)' } }, // a stale, discarded label from a wildly different time
+    ];
+    let seenPrompt = null;
+    const { host, listeners } = makeHost(chat);
+    host.sidecar.request = async ({ systemPrompt }) => { seenPrompt = systemPrompt; return JSON.stringify({ day: '2', time: '09:00', period: 'Morning' }); };
+    await timeModule.activate(host);
+
+    await roundTrip(listeners, 1, 'regenerate');
+
+    // Must reflect message #0's real time (Day 1), never the just-discarded Day 5 —
+    // proves getCurrentTime()'s beforeIndex bound is actually being used here.
+    assert.match(seenPrompt, /Day 1, 08:00 \(Morning\)/);
+    assert.doesNotMatch(seenPrompt, /Day 5/);
 });

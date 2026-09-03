@@ -338,3 +338,48 @@ test('a listener that unsubscribes itself during dispatch does not break iterati
     bus.set('m', 'key', 1);
     assert.equal(secondCalls, 1, 'unsubscribing mid-dispatch must not skip a later listener');
 });
+
+// --- onAnyWrite() — wildcard write observer for core/route-planner.js.
+
+test('onAnyWrite fires on a write to ANY channel, reserved or not, with namespace/key/writerNamespace/value', () => {
+    const bus = new ModuleDataBus();
+    const seen = [];
+    bus.onAnyWrite(event => seen.push(event));
+    bus.set('tracker', 'field:health', 42);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].namespace, 'tracker');
+    assert.equal(seen[0].key, 'field:health');
+    assert.equal(seen[0].writerNamespace, 'tracker');
+    assert.equal(seen[0].value, 42);
+    assert.ok(typeof seen[0].at === 'number');
+});
+
+test('onAnyWrite reports the actual writer, not the channel owner, for a cross-module write() into an allowExternalWrite channel', () => {
+    const bus = new ModuleDataBus();
+    bus.reserve('tracker', 'quick:x', { allowExternalWrite: true });
+    const seen = [];
+    bus.onAnyWrite(event => seen.push(event));
+    bus.write('tracker', 'quick:x', 1, 'music');
+    assert.equal(seen[0].namespace, 'tracker');
+    assert.equal(seen[0].writerNamespace, 'music');
+});
+
+test('onAnyWrite does NOT fire for a rejected (contaminated) write — schema violation, unauthorized write, or rate limit', () => {
+    const bus = new ModuleDataBus();
+    bus.reserve('tracker', 'health', { schema: { type: 'string' } });
+    const seen = [];
+    bus.onAnyWrite(event => seen.push(event));
+    bus.set('tracker', 'health', 123); // schema violation — number, not string
+    bus.write('tracker', 'health', 'ok', 'someone-else'); // unauthorized — allowExternalWrite is off
+    assert.deepEqual(seen, []);
+});
+
+test('the unsubscribe function returned by onAnyWrite stops further notifications', () => {
+    const bus = new ModuleDataBus();
+    let calls = 0;
+    const unsubscribe = bus.onAnyWrite(() => { calls++; });
+    bus.set('m', 'k', 1);
+    unsubscribe();
+    bus.set('m', 'k', 2);
+    assert.equal(calls, 1);
+});

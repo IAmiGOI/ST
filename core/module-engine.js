@@ -1,4 +1,7 @@
 import { SidecarManager } from './sidecar-manager.js';
+import { StateTrack } from './state-track.js';
+import { DependencyScanner } from './dependency-scanner.js';
+import { RoutePlanner } from './route-planner.js';
 import { ModuleDataBus } from './data-bus.js';
 import { h, show, signal, computed, effectOn, Button, Toggle, DraggableList, InfoDot } from './widgets.js';
 import { createDevPanel } from './dev-panel.js';
@@ -77,14 +80,52 @@ export class ModuleEngine {
     #moduleUpdateInfo = signal({});
     #forceTicks = new Map();
     #orderedSignal;
+    #baseUrl;
 
-    constructor(getContext) {
+    /**
+     * `baseUrl` (the extension's own root, e.g. `new URL('.', import.meta.url).href`
+     * from index.js — the only place that really knows it) is optional and only
+     * needed for one thing: letting scanServiceContracts() (below, via
+     * dependencyScanner) find a BUILT-IN module's own source file to regex-parse,
+     * the same way an externally-loaded module's already-known `sourceUrl`
+     * resolves. Omit it (tests do) and built-in modules simply contribute no
+     * service-contract edges — everything else in this class is unaffected.
+     */
+    constructor(getContext, baseUrl = null) {
         this.getContext = getContext;
-        this.sidecar = new SidecarManager(() => this.settings(), () => this.saveSettings(), () => this.getContext());
+        this.#baseUrl = baseUrl;
+        // Fourth arg is a lazy accessor, not a direct reference — this.routePlanner
+        // doesn't exist yet at this point in the constructor (it's built FROM this
+        // very SidecarManager, right below), but the accessor is only ever CALLED
+        // later, at real request() time, by which point it does. See
+        // SidecarManager's own #getRoutePlanner doc comment for why this is the
+        // one place RoutePlanner's decisions actually change real behavior.
+        this.sidecar = new SidecarManager(() => this.settings(), () => this.saveSettings(), () => this.getContext(), () => this.routePlanner);
         this.#data = new ModuleDataBus({
             getContext: () => this.getContext(),
             onContaminate: report => this.#log('warning', report.id?.split(':')[0] ?? 'bus', report.message),
         });
+        // Observes main-LLM generation state + every SideCar worker's live status
+        // and republishes both onto the bus (namespace 'state-track') — see
+        // core/state-track.js. Lives inside the engine (like SidecarManager itself,
+        // not a sibling like LorebookService) because tracking what the engine's own
+        // shared model connections are doing is intrinsic to what ModuleEngine
+        // already does for every module, the same reasoning MODULES.md gives for why
+        // host.sidecar stays here too.
+        this.stateTrack = new StateTrack(() => this.getContext(), this.#data, this.sidecar);
+        // Static "what could depend on what" graph — see core/dependency-scanner.js.
+        // Purely a read-side aggregator (no start()/subscriptions of its own): it
+        // just reads whatever a module has published to its own 'dependencies' key,
+        // fresh, whenever asked. The third arg is real per-module metadata
+        // (defaultEnabled/minEngineVersion) for activationInfo() — not something the
+        // scanner discovers itself, just handed the accessor.
+        this.dependencyScanner = new DependencyScanner(this.#data, () => [...this.#modules.keys()], id => this.#modules.get(id));
+        // Phase 3 of the same work — see core/route-planner.js. Observation +
+        // decision engine ONLY: start() below has it accumulate real pass counts
+        // from real usage right away (so it isn't starting from zero once
+        // something eventually acts on decide()'s output), but nothing anywhere
+        // in this codebase calls decide() yet — no real behavior changes.
+        this.routePlanner = new RoutePlanner(this.#data, this.sidecar);
         this.#orderedSignal = computed(() => {
             this.#layoutVersion();
             const order = this.layout().moduleOrder;
@@ -152,6 +193,17 @@ export class ModuleEngine {
         // boot on a network round trip) and never toasts — mount()'s effectOn below
         // is what turns a failed/missing result into the blinking card border.
         this.sidecar.checkHealth();
+        this.stateTrack.start();
+        this.routePlanner.start(); // purely observational — see core/route-planner.js
+        // Same fire-and-forget shape as checkHealth() above: never awaited (a
+        // network round trip per module must not delay boot), never toasts —
+        // the graph just fills in a few seconds after load. See
+        // core/dependency-scanner.js's scanServiceContracts() for what this does
+        // and why it can't just be part of the synchronous edges() read path.
+        this.dependencyScanner.scanServiceContracts(id => this.#moduleSourceUrl(id))
+            .catch(error => this.#log('warning', 'engine', `Service-contract scan failed: ${error?.message || String(error)}`));
+        this.dependencyScanner.scanActivationConditions(id => this.#moduleSourceUrl(id))
+            .catch(error => this.#log('warning', 'engine', `Activation-condition scan failed: ${error?.message || String(error)}`));
 
         const context = this.getContext();
         if (context.eventTypes?.CHAT_CHANGED && context.eventSource?.on) {
@@ -471,6 +523,22 @@ export class ModuleEngine {
      */
     async installModule(url) {
         return this.#loadRemoteModule(url);
+    }
+
+    /**
+     * Where scanServiceContracts() should fetch this module's own raw source
+     * from — an externally-loaded module already has a real `sourceUrl` (same
+     * one checkModuleUpdateAvailable() above re-resolves); a built-in one falls
+     * back to `#baseUrl` + the same `modules/<id>/index.js` convention every
+     * built-in module in this repo already follows. Returns null (not a URL)
+     * when neither is known — scanServiceContracts() treats that as "nothing to
+     * scan for this one," not an error.
+     */
+    #moduleSourceUrl(id) {
+        const sourceUrl = this.settings().modules[id]?.sourceUrl;
+        if (sourceUrl) return resolveModuleUrl(sourceUrl);
+        if (!this.#baseUrl) return null;
+        return `${this.#baseUrl}modules/${id}/index.js`;
     }
 
     async #loadRemoteModule(url) {

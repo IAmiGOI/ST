@@ -50,6 +50,22 @@ test('buildTrackerRequest fills a block\'s own templates with its own fields and
     assert.deepEqual(request.fields, ['health', 'mood']);
 });
 
+test('buildTrackerRequest\'s "Known current values" excludes a stale field the store still has saved but the block no longer configures', () => {
+    // store.js's get() returns EVERYTHING ever saved for this block — a field
+    // renamed/removed from block.fields stays in storage forever (by design,
+    // so restoring the old name later doesn't lose its history), so
+    // buildTrackerRequest itself must be the one to filter it back out before
+    // it reaches the SideCar prompt.
+    const block = {
+        fields: [{ name: 'health', instruction: '' }], // 'mood' was removed from the block's own field list
+        systemPromptTemplate: 'Current: {current}',
+    };
+    const staleStoredState = { health: 'Healthy', mood: 'Tense' }; // exactly what store.get() would still return
+    const request = buildTrackerRequest([], block, staleStoredState);
+    assert.match(request.systemPrompt, /"health":"Healthy"/);
+    assert.doesNotMatch(request.systemPrompt, /mood/, 'a field no longer in this block\'s own list must not be sent as a "known current value"');
+});
+
 test('parseTrackerResponse keeps only the requested fields', () => {
     const parsed = parseTrackerResponse('```json\n{"health":"Injured","mood":"Tense","secret":"x"}\n```', ['health', 'mood']);
     assert.deepEqual(parsed.data, { health: 'Injured', mood: 'Tense' });
