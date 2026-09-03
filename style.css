@@ -157,3 +157,20 @@
 @container (min-width: 980px) {
     .stme-settings .stme-module-list { grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); }
 }
+
+/* Top-bar launcher icon (core/full-screen-panel.js's caller in index.js) — mirrors
+   ST's own .drawer-icon so it's visually indistinguishable from a native icon. */
+.stme-launcher-active { opacity: 1 !important; color: var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)); }
+
+/* Full-screen panel: a real "app" entry point alongside the drawer, not a replacement
+   for it — appended to document.body, above everything else in the page. */
+.stme-fullscreen { position: fixed; inset: 0; z-index: 6000; display: flex; flex-direction: column; background: var(--SmartThemeBlurTintColor); color: var(--SmartThemeBodyColor); font-family: var(--mainFontFamily, inherit); }
+.stme-fullscreen[hidden] { display: none; }
+.stme-fullscreen-head { display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff))); background: linear-gradient(105deg, transparent, rgba(0, 0, 0, .12)); }
+.stme-fullscreen-head strong { flex: 1; font-size: 1.05em; letter-spacing: .02em; }
+.stme-fullscreen-body { flex: 1; overflow-y: auto; padding: 18px; }
+.stme-fullscreen-body .stme-settings .inline-drawer-content { padding: 0; border: none; background: none; box-shadow: none; }
+/* Optional (per the panel's own "Hide ST top bar" toggle): only when BOTH the panel is
+   open AND the toggle is on — both classes live on <body>, see full-screen-panel.js. */
+body.stme-fullscreen-open.stme-fullscreen-hide-topbar #top-bar,
+body.stme-fullscreen-open.stme-fullscreen-hide-topbar #top-settings-holder { visibility: hidden; }

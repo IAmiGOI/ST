@@ -149,6 +149,24 @@ export class ModuleDataBus {
         if (channel.macro) this.#unregisterMacro(channel.macro);
         this.#stopPulling(id);
         this.#channels.delete(id);
+        // A channel being retired means "this no longer exists" — its last value must not
+        // keep resolving forever (a {{macro}} would otherwise go on returning stale data for
+        // a field the owning module has since removed or disabled). Clear it along with the
+        // channel, not just the protections.
+        this.#values.delete(id);
+        this.#history.delete(id);
+        if (channel.persist) this.#clearPersisted(id);
+    }
+
+    /**
+     * Public equivalent of the handle returned by reserve().unreserve() — retires a channel
+     * by (namespace, key) without needing to have kept that handle around. Safe to call on a
+     * key that was never reserved (no-op). Use this when a module's own list of channels can
+     * shrink over time (e.g. a user-configurable field or block being removed) so the bus
+     * doesn't go on serving that channel's last value/macro forever.
+     */
+    unreserve(namespace, key) {
+        this.#unreserve(this.#id(namespace, key));
     }
 
     /** Called by the engine when a module is disabled — cleans up every channel/macro/timer it owned, even if the module's own cleanup forgot to. */

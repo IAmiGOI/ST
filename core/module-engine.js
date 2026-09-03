@@ -38,6 +38,10 @@ export class ModuleEngine {
     #chatChangedDispatching = false;
     #chatChangedBurst = [];
     #chatChangedStormLoggedAt = 0;
+    // mount() can now be called more than once — once for the drawer, again for the
+    // full-screen panel's own skeleton (core/full-screen-panel.js) — so the dev panel
+    // (a single floating window, not per-root) must only ever be built the first time.
+    #devPanelCreated = false;
 
     #registeredIds = signal([]);
     #layoutVersion = signal(0);
@@ -252,11 +256,23 @@ export class ModuleEngine {
         return settings.devPanel;
     }
 
+    /** Visibility/options for the full-screen panel (core/full-screen-panel.js) — engine-level, not per-module. */
+    fullScreenSettings() {
+        const settings = this.settings();
+        settings.fullScreen ??= { visible: false, hideTopBar: false };
+        return settings.fullScreen;
+    }
+
     /** Builds the whole reactive UI tree once. Cards persist for the life of the page from here on. */
     mount(root) {
         this.#root = root;
-        const moduleList = root.querySelector('#stme-module-list');
-        const baseList = root.querySelector('#stme-base-list');
+        // Attribute selectors, not #id — mount() can now be called more than once (the
+        // drawer, and separately the full-screen panel's own skeleton), and a literal id
+        // duplicated elsewhere in the document makes querySelector('#id') unreliable even
+        // scoped to a subtree (confirmed in jsdom; browsers vary too — HTML with a
+        // duplicate id is invalid to begin with, so don't rely on ids being unique here).
+        const moduleList = root.querySelector('[data-stme-module-list]');
+        const baseList = root.querySelector('[data-stme-base-list]');
         if (!moduleList || !baseList) return;
 
         moduleList.append(DraggableList(this.#orderedSignal, module => module.id, {
@@ -285,10 +301,15 @@ export class ModuleEngine {
         // Not a module, not nested in either list above — a floating window
         // toggled from one button at the very bottom of the whole drawer, so it
         // reads as its own detached tool rather than another card in this UI.
-        const devPanel = createDevPanel(this);
-        const devFooter = h('div', { class: 'stme-dev-footer' },
-            Button('⚙ ModuleEngine Developer', () => devPanel.toggle()));
-        (root.querySelector('.inline-drawer-content') ?? root).append(devFooter);
+        // Built only on the first mount() call — a second call (the full-screen
+        // panel's own skeleton) must not spawn a second floating dev panel.
+        if (!this.#devPanelCreated) {
+            this.#devPanelCreated = true;
+            const devPanel = createDevPanel(this);
+            const devFooter = h('div', { class: 'stme-dev-footer' },
+                Button('⚙ ModuleEngine Developer', () => devPanel.toggle()));
+            (root.querySelector('.inline-drawer-content') ?? root).append(devFooter);
+        }
     }
 
     #renderModuleHeader(module) {
@@ -416,6 +437,8 @@ export class ModuleEngine {
                  * (the engine already releases everything on disable regardless).
                  */
                 reserve: (key, options) => this.#data.reserve(module.id, key, options),
+                /** Retires a previously reserved channel (and clears its value/macro/history) without needing to have kept the handle reserve() returned — for a module whose own list of channels can shrink over time (a removable field, a deletable block). Safe to call on a key that was never reserved. */
+                unreserve: key => this.#data.unreserve(module.id, key),
                 history: key => this.#data.history(module.id, key),
                 restore: (key, stepsBack) => this.#data.restore(module.id, key, stepsBack),
                 describe: (namespace, key) => this.#data.describe(namespace, key),

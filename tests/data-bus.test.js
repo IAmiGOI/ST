@@ -299,6 +299,36 @@ test('a listener that subscribes a new listener to the same key during dispatch 
     assert.equal(sameDispatchCalls, 0, 'a listener subscribed during restore() dispatch must not run in the same pass');
 });
 
+test('unreserve(namespace, key) fully retires a channel: value, history, and macro all gone — not just protections', () => {
+    const registered = new Map();
+    const bus = new ModuleDataBus({ getContext: () => ({ registerMacro: (name, read) => registered.set(name, read), unregisterMacro: name => registered.delete(name) }) });
+    bus.reserve('tracker', 'health', { name: 'Health', schema: { type: 'string' }, macro: 'tracker_health' });
+    bus.set('tracker', 'health', 'Healthy');
+    assert.equal(bus.get('tracker', 'health'), 'Healthy');
+    assert.ok(registered.has('tracker_health'));
+    assert.equal(bus.history('tracker', 'health').length, 1);
+
+    bus.unreserve('tracker', 'health');
+
+    assert.equal(bus.get('tracker', 'health'), undefined, 'the stale value must not keep being served after the channel is retired');
+    assert.equal(registered.has('tracker_health'), false, 'the macro must be unregistered so {{tracker_health}} stops resolving to stale data');
+    assert.equal(bus.history('tracker', 'health').length, 0);
+    assert.equal(bus.describe('tracker', 'health'), null, 'the channel itself is gone, so a later plain write is unprotected again');
+});
+
+test('unreserve() on a key that was never reserved is a harmless no-op', () => {
+    const bus = new ModuleDataBus();
+    assert.doesNotThrow(() => bus.unreserve('nobody', 'nothing'));
+});
+
+test('re-reserving the same channel (e.g. re-publishing unchanged config) does not wipe its current value', () => {
+    const bus = new ModuleDataBus();
+    bus.reserve('tracker', 'health', { schema: { type: 'string' } });
+    bus.set('tracker', 'health', 'Healthy');
+    bus.reserve('tracker', 'health', { schema: { type: 'string' } });
+    assert.equal(bus.get('tracker', 'health'), 'Healthy', 'only an explicit unreserve() should clear a value, not a routine re-reserve');
+});
+
 test('a listener that unsubscribes itself during dispatch does not break iteration for the remaining listeners', () => {
     const bus = new ModuleDataBus();
     let secondCalls = 0;

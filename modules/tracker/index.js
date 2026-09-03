@@ -356,8 +356,10 @@ function renderBlockHeader(block, ui, blocks, persistBlocks, profiles, host) {
         }),
         Button('Remove', event => {
             event.preventDefault(); event.stopPropagation();
+            // persistBlocks() re-runs publish(), whose reconciliation retires every bus
+            // channel (block + per-field, macros included) this block owned — no separate
+            // cleanup needed here.
             persistBlocks(blocks.peek().filter(item => item.id !== block.id));
-            host.data.remove(`block:${block.id}`);
         }, { variant: 'danger' }),
     ];
 }
@@ -516,6 +518,15 @@ export const trackerModule = {
         // and — for the per-field channels — a registered ST macro (block kind 2: readable
         // anywhere ST itself resolves {{macros}} — prompts, World Info, character cards,
         // Quick Replies) plus `persist: true` so the value survives a page reload.
+        const DISABLED_NOTICE = '(tracking disabled)';
+        // Tracks which per-field bus channels this module owns right now, keyed by block id,
+        // so the NEXT publish() can tell a field/block that's gone (removed, or the whole
+        // block deleted) from one that's merely unchanged — and unreserve() the ones that are
+        // gone. Without this, a channel/macro reserved for a field the user later removes (or
+        // a block they delete) just keeps resolving to its last known value forever: the bus
+        // has no other signal that it should stop.
+        let publishedFields = new Map(); // blockId -> Set<fieldName>
+
         const publish = () => {
             const settings = host.moduleSettings(MODULE_DEFAULTS);
             log(`publish(): ${settings.blocks.length} block(s) — ${settings.blocks.map(b => `"${b.title}" (${sanitizeFields(b.fields).length} field(s), enabled=${b.enabled !== false})`).join('; ') || 'none configured'}.`);
@@ -523,9 +534,34 @@ export const trackerModule = {
             host.data.reserve('blocks', { name: 'Tracker blocks index', schema: { type: 'array' } });
             host.data.set('blocks', settings.blocks.map(describeBlockForBus));
 
+            const currentBlockIds = new Set(settings.blocks.map(block => block.id));
+            for (const [blockId, fieldNames] of [...publishedFields]) {
+                if (currentBlockIds.has(blockId)) continue;
+                // The whole block was removed since the last publish() — retire everything it owned.
+                for (const fieldName of fieldNames) host.data.unreserve(`field:${blockId}:${fieldName}`);
+                host.data.unreserve(`block:${blockId}`);
+                publishedFields.delete(blockId);
+                log(`publish(): block ${blockId} no longer exists — retired its bus channels.`);
+            }
+
             for (const block of settings.blocks) {
-                const state = store.get(block.id);
+                const enabled = block.enabled !== false;
+                const rawState = store.get(block.id);
                 const fields = sanitizeFields(block.fields).map(field => field.name);
+                // store.get() can carry orphaned keys from a field that used to exist on this
+                // block (the store itself intentionally never deletes them, see store.js) —
+                // filter to only the CURRENTLY configured fields before this goes on the bus,
+                // so a consumer reading the raw `.state` object never sees ghost data either.
+                const state = Object.fromEntries(fields.map(name => [name, enabled ? (rawState[name] ?? '') : DISABLED_NOTICE]));
+
+                const previousFields = publishedFields.get(block.id) ?? new Set();
+                for (const fieldName of previousFields) {
+                    if (!fields.includes(fieldName)) {
+                        host.data.unreserve(`field:${block.id}:${fieldName}`);
+                        log(`publish(): field "${fieldName}" removed from block "${block.title}" — retired its bus channel.`);
+                    }
+                }
+                publishedFields.set(block.id, new Set(fields));
 
                 host.data.reserve(`block:${block.id}`, { name: `Tracker: ${block.title}`, schema: { type: 'object' }, persist: true });
                 host.data.set(`block:${block.id}`, { ...describeBlockForBus(block), state, updatedAt: Date.now() });
@@ -538,7 +574,10 @@ export const trackerModule = {
                         macro: macroSlug(block.title, fieldName),
                         persist: true,
                     });
-                    if (state[fieldName]) host.data.set(fieldKey, state[fieldName]);
+                    // Always set, even to an empty string or the disabled notice — a field
+                    // that was just reset or disabled must stop showing its last real value,
+                    // not keep it frozen because a falsy new value used to skip the write.
+                    host.data.set(fieldKey, state[fieldName]);
                 }
             }
         };
