@@ -11,12 +11,37 @@ const stopPropagation = event => event.stopPropagation();
  * configured an LLM extension before, not a technical reference (that belongs in
  * `description`/MODULES.md instead). `on:click` stops propagation so it never
  * toggles a parent `<details>` card open/closed.
+ *
+ * The tooltip anchors `left: 0` by default (CSS) and stays under `max-width` even on
+ * a narrow panel — but a dot after a long title can sit far enough right in a narrow
+ * card that a left-anchored tooltip still runs past the actual browser viewport (CSS
+ * alone can't know where the dot ends up; `min(…, 100vw)` bounds the tooltip's own
+ * size, not its position). `visibility: hidden` (not `display: none`) keeps the
+ * tooltip laid out even while closed, so its real width is measurable before it's
+ * ever shown — on hover/focus we check whether it would overflow the viewport at its
+   default left-anchored position and flip to right-anchored if so.
  */
 export function InfoDot(text) {
-    return h('span', { class: 'stme-info-dot', tabindex: '0', role: 'note', 'aria-label': text, 'on:click': stopPropagation },
-        'i',
-        h('span', { class: 'stme-info-tooltip' }, text),
-    );
+    const tooltip = h('span', { class: 'stme-info-tooltip' }, text);
+    const reposition = () => {
+        // Reset to the CSS default (flush with the dot's own left edge) before measuring —
+        // `left` here is relative to the dot (position:relative), so the tooltip's actual
+        // viewport position is dotRect.left + this offset. Clamp that viewport position into
+        // [8, innerWidth - width - 8] and convert back to a dot-relative offset — this
+        // handles overflow on EITHER side symmetrically (a binary left-vs-right flip alone
+        // can still overflow the opposite edge on a narrow enough viewport, since the
+        // tooltip's own width can approach the viewport's width there).
+        tooltip.style.left = '0px';
+        const dotRect = dot.getBoundingClientRect();
+        const width = tooltip.offsetWidth;
+        const clampedViewportLeft = Math.min(Math.max(dotRect.left, 8), window.innerWidth - width - 8);
+        tooltip.style.left = `${clampedViewportLeft - dotRect.left}px`;
+    };
+    const dot = h('span', {
+        class: 'stme-info-dot', tabindex: '0', role: 'note', 'aria-label': text, 'on:click': stopPropagation,
+        'on:mouseenter': reposition, 'on:focus': reposition,
+    }, 'i', tooltip);
+    return dot;
 }
 
 /** Label + control row, matching the shared `.stme-field` look used across every module. */

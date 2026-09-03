@@ -11,18 +11,47 @@
     --stme-radius-sm: 6px;
 }
 
-.stme-settings .stme-intro, .stme-note-status { opacity: .75; font-size: .9em; }
+.stme-settings .stme-intro { opacity: .75; font-size: .9em; }
+/* Notebook's own top-level children (status, settings, editor, note list) are appended
+   directly with no flex/gap on their parent — status previously had no bottom margin at
+   all, so it sat flush against the settings fields right below it with zero breathing
+   room (confirmed: 0px gap), reading as overlapping text once real ST's font metrics
+   push it even a little further. */
+.stme-note-status { display: block; margin: 0 0 10px; opacity: .75; font-size: .9em; }
 .stme-settings .stme-module-list, .stme-settings .stme-note-list, .stme-settings .stme-note-editor, .stme-settings .stme-note-settings { display: flex; flex-direction: column; gap: 8px; }
-.stme-settings .stme-module { margin: 10px 0; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-card); overflow: hidden; }
-.stme-settings .stme-module-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 10px; background: var(--SmartThemeBlurTintColor); }
+.stme-settings .stme-module, .stme-settings .stme-base-card { margin: 10px 0; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-card); }
+/* No overflow:hidden on the card itself (there used to be one, on .stme-module only —
+   .stme-base-card never had a border/radius/overflow rule of its own at all, so SideCar
+   Manager/Module Loader rendered with square corners and no visible border line). Clipping
+   the card was how the header's/content's own square corners were kept from poking out past
+   the card's rounded border — but it also clipped anything that pops OUTSIDE the card, like
+   the InfoDot tooltip below (it opens upward, past the card's own top edge, so a clipping
+   ancestor hides it entirely). Rounding the header's top corners and the content's bottom
+   corners directly achieves the same clean look without needing to clip anything. */
+.stme-settings .stme-module-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 10px; background: var(--SmartThemeBlurTintColor); border-radius: var(--stme-radius-card) var(--stme-radius-card) 0 0; }
 .stme-settings .stme-module-header small { display: block; margin-top: 3px; opacity: .7; }
 .stme-settings .stme-toggle { white-space: nowrap; }
 
 /* Plain-language "what is this" hover badge (InfoDot in core/widgets.js) — next to a card title. */
 .stme-info-dot { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: 6px; border-radius: 50%; background: color-mix(in srgb, var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)) 65%, transparent); color: var(--SmartThemeBodyColor); font: italic 700 10px/1 Georgia, serif; cursor: help; user-select: none; vertical-align: middle; }
 .stme-info-dot:hover, .stme-info-dot:focus-visible { background: var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)); outline: none; }
-.stme-info-tooltip { position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translate(-50%, 4px); width: max-content; max-width: 260px; padding: 8px 10px; border-radius: var(--stme-radius-card); border: 1px solid var(--SmartThemeBorderColor); background: var(--SmartThemeBlurTintColor); box-shadow: 0 10px 26px rgba(0, 0, 0, .4); font: normal 400 .82em/1.4 var(--mainFontFamily, inherit); color: var(--SmartThemeBodyColor); text-align: left; white-space: normal; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .15s ease, transform .15s ease; z-index: 20; }
-.stme-info-dot:hover .stme-info-tooltip, .stme-info-dot:focus-visible .stme-info-tooltip { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+/* left:0 (not centered) + a viewport-relative max-width: SillyTavern's own extensions panel
+   can be quite narrow, and this card can sit close to either edge of it. A tooltip centered
+   on the dot, or wide enough to not care, would routinely overflow a narrow panel on one
+   side or the other. Anchoring the tooltip's LEFT edge to the dot and letting it grow
+   rightward keeps it predictable; clamping width against 100vw keeps it from ever demanding
+   more room than the viewport actually has, regardless of how narrow the real panel is. */
+/* display:none (not just visibility:hidden) at rest — a visibility:hidden box still
+   takes up real layout space, which is exactly what caused this tooltip to overflow
+   the page even when nobody had ever hovered it (its default left:0 position could
+   extend past the viewport depending on where the dot itself landed, and getting
+   the box out of layout entirely is the only way "at rest" can never contribute to
+   that regardless of position). InfoDot's JS reads .offsetWidth to reposition this
+   on hover/focus — it works because :hover/:focus-visible flips this to display:block
+   before the corresponding mouseenter/focus DOM event handler runs. */
+.stme-info-tooltip { display: none; position: absolute; left: 0; bottom: calc(100% + 8px); width: max-content; max-width: min(260px, calc(100vw - 32px)); padding: 8px 10px; border-radius: var(--stme-radius-card); border: 1px solid var(--SmartThemeBorderColor); background: var(--SmartThemeBlurTintColor); box-shadow: 0 10px 26px rgba(0, 0, 0, .4); font: normal 400 .82em/1.4 var(--mainFontFamily, inherit); color: var(--SmartThemeBodyColor); text-align: left; white-space: normal; pointer-events: none; z-index: 20; }
+.stme-info-dot:hover .stme-info-tooltip, .stme-info-dot:focus-visible .stme-info-tooltip { display: block; }
+.stme-settings .stme-module-content, .stme-settings .stme-module-error { border-radius: 0 0 var(--stme-radius-card) var(--stme-radius-card); }
 .stme-settings .stme-module-content { padding: 10px; }
 .stme-settings .stme-note-settings { padding-bottom: 8px; border-bottom: 1px solid var(--SmartThemeBorderColor); }
 .stme-settings .stme-note-settings label { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -73,6 +102,13 @@
 .stme-settings .stme-module, .stme-settings .stme-base-card { border-color: color-mix(in srgb, var(--SmartThemeBorderColor) 78%, var(--stme-accent)); box-shadow: 0 3px 14px rgba(0, 0, 0, .13); transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease; }
 .stme-settings .stme-module:hover, .stme-settings .stme-base-card:hover { border-color: var(--stme-accent); box-shadow: 0 5px 19px rgba(0, 0, 0, .2); }
 .stme-settings .stme-module-header { background: linear-gradient(105deg, var(--SmartThemeBlurTintColor), var(--stme-panel)); }
+/* Grid/flex items default to min-width:auto, which for text inputs means "at least my
+   intrinsic content width" — so a `1fr` grid column holding an <input>/<select> refuses
+   to shrink below that even when the row's real available space (SillyTavern's actual
+   extensions panel can be quite narrow) is smaller, forcing the whole row to overflow
+   its card instead of the input just getting narrower. Confirmed as the cause of
+   truncated placeholder text in Tracker's field rows on a real, narrow ST panel. */
+.stme-settings input, .stme-settings select, .stme-settings textarea { min-width: 0; }
 .stme-settings .stme-module-header strong { color: var(--SmartThemeBodyColor); }
 .stme-settings .stme-module-content, .stme-settings .stme-sidecar-fields { background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, transparent); }
 .stme-settings .stme-sampler, .stme-settings .stme-reasoning { border-color: color-mix(in srgb, var(--SmartThemeBorderColor) 70%, var(--stme-accent)); background: rgba(0, 0, 0, .06); }
@@ -102,7 +138,7 @@
 #chat .stme-rp-time-label, .mes .stme-rp-time-label { color: var(--SmartThemeBodyColor); opacity: .7; font-size: .72em; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
 #chat .stme-rp-time-value, .mes .stme-rp-time-value { color: var(--SmartThemeBodyColor); font-size: 1.12em; font-weight: 700; letter-spacing: .025em; line-height: 1.25; }
 .stme-settings .stme-module-error { display: flex; flex-direction: column; gap: 9px; color: var(--SmartThemeQuoteColor, #e88); border-left: 3px solid currentColor; background: rgba(160, 35, 35, .12); }
-.stme-settings .stme-sidecar-manager { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }.stme-settings .stme-sidecar-manager-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:4px 2px; }.stme-settings .stme-sidecar-manager-head small { display:block; max-width:360px; opacity:.7; }.stme-settings .stme-sidecar-worker { border:1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-card); overflow:hidden; }.stme-settings .stme-sidecar-worker > summary { padding: 9px 10px; cursor:pointer; font-weight:700; background:var(--SmartThemeBlurTintColor); }.stme-settings .stme-sidecar-worker .stme-sidecar { margin:0; border:0; border-radius:0; }
+.stme-settings .stme-sidecar-manager { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }.stme-settings .stme-sidecar-manager-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:4px 2px; }.stme-settings .stme-sidecar-manager-head small { display:block; max-width:360px; opacity:.7; }.stme-settings .stme-sidecar-worker { border:1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-card); }.stme-settings .stme-sidecar-worker > summary { padding: 9px 10px; cursor:pointer; font-weight:700; background:var(--SmartThemeBlurTintColor); border-radius: var(--stme-radius-card) var(--stme-radius-card) 0 0; }.stme-settings .stme-sidecar-worker .stme-sidecar { margin:0; border:0; border-radius: 0 0 var(--stme-radius-card) var(--stme-radius-card); }
 .stme-settings .stme-sidecar-worker > summary { display:flex; align-items:center; justify-content:space-between; gap:8px; }.stme-settings .stme-worker-remove { font-size:.8em; color:#f2b4b4; }
 .stme-settings .stme-loader { display:flex; gap:8px; align-items:center; }.stme-settings .stme-loader input { flex:1; min-width:0; }
 
@@ -170,6 +206,13 @@
 .stme-settings .inline-drawer-toggle { padding: 2px 2px 10px; }
 .stme-settings .inline-drawer-toggle b { font-size: 1.15em; letter-spacing: .02em; background: linear-gradient(90deg, var(--stme-accent), color-mix(in srgb, var(--stme-accent) 35%, var(--SmartThemeBodyColor))); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .stme-settings .stme-module-list, .stme-settings .stme-base-list { display: grid; grid-template-columns: 1fr; gap: 12px; align-items: start; }
+/* Grid items default to min-width:auto, i.e. "at least as wide as my content's own
+   minimum" — same trap as inputs inside a grid row (see the input/select/textarea rule
+   above), just one level up: a whole card refusing to shrink below whatever its widest
+   descendant demands, forcing the CARD itself wider than the single-column `1fr` track
+   SillyTavern's actual (often narrow) extensions panel gives it. Confirmed: without this,
+   a card measured 419px wide inside a 325px-wide grid track. */
+.stme-settings .stme-module, .stme-settings .stme-base-card { min-width: 0; }
 /* DraggableList's own wrapper div (and its internal list() wrapper) must not
    count as a grid/flex box itself, or its cards collapse into a single cell. */
 .stme-draggable-list { display: contents; }
