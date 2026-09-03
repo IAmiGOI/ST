@@ -52,19 +52,56 @@ function setCurrentTime(context, time) { context.chatMetadata ??= {}; context.ch
 export const timeModule = {
     id: 'time', title: 'RP Time', description: 'Runs SideCar in parallel with generation and appends the inferred in-world time.', defaultEnabled: false,
     activate(host) {
+        const log = (...args) => console.info('[STME:time]', ...args);
+        const warn = (...args) => console.warn('[STME:time]', ...args);
         let pending = null; let running = false;
-        const start = host.onEvent('GENERATION_STARTED', () => { if (pending || !host.sidecar.isConfigured()) return; const context = host.context(); const settings = host.moduleSettings(TIME_DEFAULTS); pending = host.sidecar.request({ ...buildTimeRequest(context.chat, settings, getCurrentTime(context, settings)), profileId: settings.sidecarProfile }).catch(error => ({ error })); });
+        const start = host.onEvent('GENERATION_STARTED', () => {
+            if (pending) { log('GENERATION_STARTED ignored — a request is already pending.'); return; }
+            if (!host.sidecar.isConfigured()) { warn('GENERATION_STARTED ignored — SideCar is not configured. Per-worker state:', host.sidecar.diagnostics()); return; }
+            const context = host.context(); const settings = host.moduleSettings(TIME_DEFAULTS);
+            const built = buildTimeRequest(context.chat, settings, getCurrentTime(context, settings));
+            log(`GENERATION_STARTED — sending SideCar request (profile "${settings.sidecarProfile}").`);
+            pending = host.sidecar.request({ ...built, profileId: settings.sidecarProfile })
+                .then(result => { log('SideCar request resolved:', result); return result; })
+                .catch(error => { warn('SideCar request rejected:', error); return { error }; });
+        });
         const received = host.onEvent('MESSAGE_RECEIVED', async (messageId, type) => {
-            if (running || ['swipe', 'continue', 'appendFinal', 'first_message', 'command', 'extension', 'regenerate'].includes(type)) return;
+            log(`MESSAGE_RECEIVED (messageId=${messageId}, type=${type}).`);
+            if (running) { log('Ignored — already processing a previous MESSAGE_RECEIVED.'); return; }
+            if (['swipe', 'continue', 'appendFinal', 'first_message', 'command', 'extension', 'regenerate'].includes(type)) { log(`Ignored — message type "${type}" is excluded.`); return; }
             const context = host.context(); const settings = host.moduleSettings(TIME_DEFAULTS); const resolved = resolveMessage(context.chat ?? [], messageId); const request = pending; pending = null;
-            if (!resolved?.message || resolved.message.is_user || resolved.message.is_system || resolved.message.extra?.[TIME_EXTRA_KEY] || !request) return;
+            if (!resolved?.message) { warn(`Ignored — could not resolve a chat message for id ${messageId}.`); return; }
+            if (resolved.message.is_user || resolved.message.is_system) { log('Ignored — message is from the user or is a system message.'); return; }
+            if (resolved.message.extra?.[TIME_EXTRA_KEY]) { log('Ignored — this message already has a time label.'); return; }
+            if (!request) { warn('Ignored — no pending SideCar request (GENERATION_STARTED never fired, or SideCar was not configured at that point).'); return; }
             running = true;
-            try { const result = await request; if (result?.error) throw result.error; if (!appendTime(resolved.message, result, settings)) throw new Error('SideCar returned no usable time label.'); setCurrentTime(context, resolved.message.extra[TIME_EXTRA_KEY]); updateMessage(context, resolved.index, resolved.message); setTimeout(() => renderBadge(resolved.message.mesid ?? resolved.index, resolved.message.extra[TIME_EXTRA_KEY])); }
+            try {
+                const result = await request;
+                if (result?.error) throw result.error;
+                if (!appendTime(resolved.message, result, settings)) throw new Error('SideCar returned no usable time label.');
+                log(`Applying time label "${resolved.message.extra[TIME_EXTRA_KEY]}" to message #${resolved.index}.`);
+                setCurrentTime(context, resolved.message.extra[TIME_EXTRA_KEY]);
+                updateMessage(context, resolved.index, resolved.message);
+                setTimeout(() => {
+                    const target = document.querySelector(`.mes[mesid="${resolved.message.mesid ?? resolved.index}"] .mes_text, #chat .mes[mesid="${resolved.message.mesid ?? resolved.index}"] .mes_text`);
+                    if (!target) warn(`Badge DOM target not found for mesid ${resolved.message.mesid ?? resolved.index} — badge was not appended to the chat.`);
+                    renderBadge(resolved.message.mesid ?? resolved.index, resolved.message.extra[TIME_EXTRA_KEY]);
+                });
+            }
             catch (error) { console.error('[ST Module Engine] RP Time SideCar request failed:', error); host.toast('warning', error?.message || 'Could not determine RP time.', 'RP Time'); } finally { running = false; }
         });
-        const refreshBadges = () => { const context = host.context(); (context.chat ?? []).forEach((message, index) => { if (message.extra?.[TIME_EXTRA_KEY]) renderBadge(message.mesid ?? index, message.extra[TIME_EXTRA_KEY]); }); }; const changed = host.onChatChanged(refreshBadges); return () => { start(); received(); changed(); };
+        const refreshBadges = () => {
+            const context = host.context();
+            let count = 0;
+            (context.chat ?? []).forEach((message, index) => { if (message.extra?.[TIME_EXTRA_KEY]) { count++; renderBadge(message.mesid ?? index, message.extra[TIME_EXTRA_KEY]); } });
+            log(`refreshBadges: re-applied ${count} existing time label(s) after a chat change.`);
+        };
+        const changed = host.onChatChanged(refreshBadges);
+        log('activate() complete.');
+        return () => { start(); received(); changed(); };
     },
     render(container, host) {
+        console.info('[STME:time]', 'render() called.');
         const settings = host.moduleSettings(TIME_DEFAULTS);
         const profiles = signal(host.sidecar.profiles());
 

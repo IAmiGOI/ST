@@ -499,6 +499,9 @@ export const trackerModule = {
     defaultEnabled: false,
 
     activate(host) {
+        const log = (...args) => console.info('[STME:tracker]', ...args);
+        const warn = (...args) => console.warn('[STME:tracker]', ...args);
+        log('activate() starting.');
         const store = createTrackerStore(host.context);
         const pending = new Map();
         const running = new Set();
@@ -515,6 +518,7 @@ export const trackerModule = {
         // Quick Replies) plus `persist: true` so the value survives a page reload.
         const publish = () => {
             const settings = host.moduleSettings(MODULE_DEFAULTS);
+            log(`publish(): ${settings.blocks.length} block(s) — ${settings.blocks.map(b => `"${b.title}" (${sanitizeFields(b.fields).length} field(s), enabled=${b.enabled !== false})`).join('; ') || 'none configured'}.`);
 
             host.data.reserve('blocks', { name: 'Tracker blocks index', schema: { type: 'array' } });
             host.data.set('blocks', settings.blocks.map(describeBlockForBus));
@@ -600,6 +604,7 @@ export const trackerModule = {
 
         const renderHud = () => {
             const blocksIndex = host.data.get('blocks', []).filter(block => block.enabled);
+            log(`renderHud(): ${blocksIndex.length} enabled block(s) on the bus, panel hidden=${hud.hidden}.`);
             const body = hud.querySelector('.stme-tracker-hud-body');
             body.replaceChildren();
             if (!blocksIndex.length) {
@@ -666,37 +671,47 @@ export const trackerModule = {
         const unmakeDraggable = makeHudDraggable(hud, host);
 
         const start = host.onEvent('GENERATION_STARTED', () => {
-            if (!host.sidecar.isConfigured()) return;
+            if (!host.sidecar.isConfigured()) { warn('GENERATION_STARTED ignored — SideCar is not configured. Per-worker state:', host.sidecar.diagnostics()); return; }
             const context = host.context();
             const settings = host.moduleSettings(MODULE_DEFAULTS);
+            if (!settings.blocks.length) { log('GENERATION_STARTED — no tracker blocks configured, nothing to request.'); return; }
+            let sent = 0;
             for (const block of settings.blocks) {
-                if (!block.enabled || pending.has(block.id)) continue;
+                if (!block.enabled) { log(`Block "${block.title}" skipped — disabled.`); continue; }
+                if (pending.has(block.id)) { log(`Block "${block.title}" skipped — a request is already pending.`); continue; }
                 const fields = sanitizeFields(block.fields);
-                if (!fields.length) continue;
+                if (!fields.length) { log(`Block "${block.title}" skipped — no fields configured.`); continue; }
                 const built = buildTrackerRequest(context.chat, block, store.get(block.id));
+                log(`Block "${block.title}" — sending SideCar request (profile "${block.sidecarProfile}", fields: ${fields.map(f => f.name).join(', ')}).`);
+                sent++;
                 pending.set(block.id, host.sidecar
                     .request({ systemPrompt: built.systemPrompt, prompt: built.prompt, profileId: block.sidecarProfile })
-                    .then(text => ({ text, fields: built.fields }))
-                    .catch(error => ({ error })));
+                    .then(text => { log(`Block "${block.title}" — SideCar replied:`, text); return { text, fields: built.fields }; })
+                    .catch(error => { warn(`Block "${block.title}" — SideCar request rejected:`, error); return { error }; }));
             }
+            log(`GENERATION_STARTED — ${sent} request(s) sent, ${settings.blocks.length - sent} block(s) skipped.`);
         });
 
         const received = host.onEvent('MESSAGE_RECEIVED', async (messageId, type) => {
-            if (!pending.size || IGNORED_MESSAGE_TYPES.includes(type)) return;
+            log(`MESSAGE_RECEIVED (messageId=${messageId}, type=${type}), ${pending.size} pending request(s).`);
+            if (!pending.size) { log('Ignored — no pending SideCar requests.'); return; }
+            if (IGNORED_MESSAGE_TYPES.includes(type)) { log(`Ignored — message type "${type}" is excluded.`); return; }
 
             const context = host.context();
             const resolved = resolveMessage(context.chat ?? [], messageId);
             const requests = [...pending.entries()];
             pending.clear();
 
-            if (!resolved?.message || resolved.message.is_user || resolved.message.is_system) return;
+            if (!resolved?.message) { warn(`Could not resolve a chat message for id ${messageId} — pending requests dropped.`); return; }
+            if (resolved.message.is_user || resolved.message.is_system) { log('Ignored — message is from the user or is a system message.'); return; }
 
             const settings = host.moduleSettings(MODULE_DEFAULTS);
             let changed = false;
             for (const [blockId, requestPromise] of requests) {
-                if (running.has(blockId)) continue;
+                if (running.has(blockId)) { log(`Block ${blockId} — already applying a previous result, skipped.`); continue; }
                 const block = settings.blocks.find(item => item.id === blockId);
-                if (!block || resolved.message.extra?.[TRACKER_EXTRA_KEY]?.[blockId]) continue;
+                if (!block) { warn(`Block ${blockId} — no longer exists in settings, dropping its result.`); continue; }
+                if (resolved.message.extra?.[TRACKER_EXTRA_KEY]?.[blockId]) { log(`Block "${block.title}" — message already has a snapshot, skipped.`); continue; }
 
                 running.add(blockId);
                 try {
@@ -707,12 +722,13 @@ export const trackerModule = {
 
                     const nextState = store.set(blockId, parsed.data, result.fields);
                     const label = buildLabel(nextState, result.fields, block.displayTemplate);
-                    if (!label) continue;
+                    if (!label) { warn(`Block "${block.title}" — parsed data produced an empty label, skipping badge for this message.`, nextState); continue; }
 
                     resolved.message.extra ??= {};
                     resolved.message.extra[TRACKER_EXTRA_KEY] ??= {};
                     resolved.message.extra[TRACKER_EXTRA_KEY][blockId] = { title: block.title, label };
                     changed = true;
+                    log(`Block "${block.title}" — applied label "${label}" to message #${resolved.index}.`);
                 } catch (error) {
                     console.error(`[ST Module Engine] Tracker "${block?.title ?? blockId}" SideCar request failed:`, error);
                     host.toast('warning', error?.message || 'Could not update tracked state.', block?.title || 'Tracker');
@@ -724,17 +740,26 @@ export const trackerModule = {
             if (changed) {
                 updateMessage(context, resolved.index, resolved.message);
                 publish();
-                setTimeout(() => renderBadges(resolved.message.mesid ?? resolved.index, resolved.message.extra[TRACKER_EXTRA_KEY]));
+                setTimeout(() => {
+                    const target = document.querySelector(`.mes[mesid="${resolved.message.mesid ?? resolved.index}"] .mes_text, #chat .mes[mesid="${resolved.message.mesid ?? resolved.index}"] .mes_text`);
+                    if (!target) warn(`Badge DOM target not found for mesid ${resolved.message.mesid ?? resolved.index} — badge(s) were not appended to the chat.`);
+                    renderBadges(resolved.message.mesid ?? resolved.index, resolved.message.extra[TRACKER_EXTRA_KEY]);
+                });
+            } else {
+                log('MESSAGE_RECEIVED handled — no block produced a usable label, nothing changed.');
             }
         });
 
         const refreshBadges = () => {
             const context = host.context();
+            let count = 0;
             (context.chat ?? []).forEach((message, index) => {
-                if (message.extra?.[TRACKER_EXTRA_KEY]) renderBadges(message.mesid ?? index, message.extra[TRACKER_EXTRA_KEY]);
+                if (message.extra?.[TRACKER_EXTRA_KEY]) { count++; renderBadges(message.mesid ?? index, message.extra[TRACKER_EXTRA_KEY]); }
             });
+            log(`refreshBadges: re-applied badges for ${count} message(s) after a chat change.`);
         };
         const chatChangedUnsub = host.onChatChanged(() => { refreshBadges(); publish(); });
+        log('activate() complete.');
 
         return () => {
             start(); received(); chatChangedUnsub();
@@ -751,6 +776,7 @@ export const trackerModule = {
     },
 
     render(container, host) {
+        console.info('[STME:tracker]', `render() — ${host.moduleSettings(MODULE_DEFAULTS).blocks.length} block(s) in settings.`);
         const settings = host.moduleSettings(MODULE_DEFAULTS);
         const store = createTrackerStore(host.context);
         const profiles = signal(host.sidecar.profiles());

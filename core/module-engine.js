@@ -154,17 +154,24 @@ export class ModuleEngine {
             return;
         }
         this.#chatChangedDispatching = true;
+        const dispatchStart = Date.now();
+        console.info(`[STME:engine] CHAT_CHANGED dispatch starting — ${this.#chatListeners.size} listener(s).`);
         try {
+            let index = 0;
             for (const listener of [...this.#chatListeners]) {
+                index++;
+                const listenerStart = Date.now();
                 try {
                     const result = listener();
                     Promise.resolve(result).catch(error => this.#log('error', 'engine', `A chat-changed listener failed: ${error?.message || String(error)}`, error));
                 } catch (error) {
                     this.#log('error', 'engine', `A chat-changed listener failed: ${error?.message || String(error)}`, error);
                 }
+                console.info(`[STME:engine] CHAT_CHANGED listener ${index}/${this.#chatListeners.size} took ${Date.now() - listenerStart}ms.`);
             }
         } finally {
             this.#chatChangedDispatching = false;
+            console.info(`[STME:engine] CHAT_CHANGED dispatch finished in ${Date.now() - dispatchStart}ms.`);
         }
     }
 
@@ -310,11 +317,13 @@ export class ModuleEngine {
         });
         return show(stateKey, key => {
             const state = key.split('#')[0];
+            console.info(`[STME:engine] #renderModuleBody("${module.id}") — state="${state}".`);
             if (state === 'disabled') return null;
             if (state === 'error') return this.#renderErrorCard(module, this.#errorMap()[module.id]);
             const body = h('div', {});
             try {
                 module.render(body, this.#hostFor(module));
+                console.info(`[STME:engine] "${module.id}".render() completed, ${body.children.length} top-level child node(s).`);
             } catch (renderError) {
                 this.#log('error', module.id, `UI render failed: ${renderError?.message || String(renderError)}`, renderError);
                 body.replaceChildren();
@@ -467,7 +476,14 @@ export class ModuleEngine {
                 const context = this.getContext();
                 const eventName = context.eventTypes?.[eventType] ?? eventType;
                 if (!context.eventSource?.on) throw new Error('SillyTavern event API is unavailable.');
-                const guarded = (...args) => { try { const result = listener(...args); Promise.resolve(result).catch(error => this.#log('error', module.id, `Event ${eventType} failed: ${error?.message || String(error)}`, error)); return result; } catch (error) { this.#log('error', module.id, `Event ${eventType} failed: ${error?.message || String(error)}`, error); } };
+                if (context.eventTypes && !(eventType in context.eventTypes)) {
+                    console.warn(`[STME:engine] "${module.id}".onEvent("${eventType}") — this key is NOT present in context.eventTypes; ST will never fire an event with this exact name, so this listener will silently never run. Check the real ST event name.`);
+                }
+                console.info(`[STME:engine] "${module.id}" subscribed to event "${eventType}" (resolved to eventSource name "${eventName}").`);
+                const guarded = (...args) => {
+                    console.info(`[STME:engine] Event "${eventType}" (as "${eventName}") fired for "${module.id}".`, args);
+                    try { const result = listener(...args); Promise.resolve(result).catch(error => this.#log('error', module.id, `Event ${eventType} failed: ${error?.message || String(error)}`, error)); return result; } catch (error) { this.#log('error', module.id, `Event ${eventType} failed: ${error?.message || String(error)}`, error); }
+                };
                 context.eventSource.on(eventName, guarded);
                 return () => context.eventSource.off?.(eventName, guarded);
             },
