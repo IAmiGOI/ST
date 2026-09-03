@@ -13,11 +13,31 @@ export const notebookModule = {
 
     activate(host) {
         const store = createNotebookStore(host.context);
+        // inject()/notify() run on every CHAT_CHANGED (see onChatChanged below), so calling
+        // an ST API unconditionally here means every single chat switch re-issues a
+        // setExtensionPrompt call even when nothing about the notebook actually changed.
+        // If ST's own prompt manager reacts to that call (e.g. by saving/re-rendering
+        // something that can itself provoke another CHAT_CHANGED), that turns "notebook is
+        // enabled while a chat opens" into a self-sustaining external loop that no amount of
+        // fixing OUR OWN reactive framework can stop, since ST's side keeps calling us right
+        // back. Tracking the last value we actually set and skipping a no-op call closes that
+        // loop at the source instead of just bounding how much work happens once it starts.
+        let lastInjected = null;
         const inject = () => {
             const { injectionDepth } = store.settings();
-            host.setPrompt(PROMPT_KEY, store.prompt(), 1, injectionDepth, 0);
+            const prompt = store.prompt();
+            const signature = `${injectionDepth}::${prompt}`;
+            if (signature === lastInjected) return;
+            lastInjected = signature;
+            host.setPrompt(PROMPT_KEY, prompt, 1, injectionDepth, 0);
         };
-        const notify = () => host.data.set(BUS_KEY, Date.now());
+        let lastNotified = null;
+        const notify = () => {
+            const signature = JSON.stringify(store.notes()) + JSON.stringify(store.settings());
+            if (signature === lastNotified) return;
+            lastNotified = signature;
+            host.data.set(BUS_KEY, Date.now());
+        };
         host.registerTool({
             name: TOOL_NAME,
             displayName: 'Notebook',

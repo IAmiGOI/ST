@@ -139,6 +139,7 @@ export class ModuleDataBus {
             this.#startPulling(id, channel);
         }
 
+        console.info(`[STME:bus] reserve("${id}") — name="${name ?? id}", schema=${schema ? 'yes' : 'no'}, macro=${macro ?? 'none'}, persist=${persist}.`);
         return Object.freeze({ id, unreserve: () => this.#unreserve(id) });
     }
 
@@ -277,7 +278,7 @@ export class ModuleDataBus {
 
     #registerMacro(name, id) {
         const context = this.#getContext?.();
-        if (!context) return;
+        if (!context) { console.warn(`[STME:bus] registerMacro("${name}") for "${id}" skipped — no context available.`); return; }
         const read = () => {
             const value = this.#values.get(id);
             if (value == null) return '';
@@ -286,8 +287,12 @@ export class ModuleDataBus {
         // Modern engine (staging-only as of this writing) first; legacy getContext() API as the fallback everyone on a stable release actually has.
         if (typeof context.macros?.register === 'function') {
             context.macros.register(name, { handler: read, category: 'STATE', description: `ST Module Engine bus channel "${id}".` });
+            console.info(`[STME:bus] Macro "{{${name}}}" registered for "${id}" via context.macros.register.`);
         } else if (typeof context.registerMacro === 'function') {
             context.registerMacro(name, read);
+            console.info(`[STME:bus] Macro "{{${name}}}" registered for "${id}" via legacy context.registerMacro.`);
+        } else {
+            console.warn(`[STME:bus] Macro "{{${name}}}" for "${id}" was NOT registered — neither context.macros.register nor context.registerMacro is available in this ST build.`);
         }
     }
 
