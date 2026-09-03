@@ -9,6 +9,10 @@
  */
 
 export const DEFAULT_CATALOG_URL = 'https://raw.githubusercontent.com/IAmiGOI/SillyTavernME-Modules/main/catalog.json';
+// Same repository/branch as the URL above, in link (not raw-file) form — used to build
+// the GitHub "create new file" link core/module-browser.js's submission form opens.
+export const CATALOG_REPO_URL = 'https://github.com/IAmiGOI/SillyTavernME-Modules';
+export const CATALOG_REPO_BRANCH = 'main';
 
 /**
  * Normalizes one raw catalog entry, or returns null if it's missing something a
@@ -37,6 +41,12 @@ export function parseCatalogEntry(raw) {
         tags: Array.isArray(raw.tags) ? raw.tags.map(tag => String(tag).trim()).filter(Boolean) : [],
         minEngineVersion: raw.minEngineVersion ? String(raw.minEngineVersion) : null,
         updatedAt: raw.updatedAt ? String(raw.updatedAt) : null,
+        // Set by hand by the maintainer when accepting an entry into catalog.json — NOT
+        // something a contributor's own submission form can set (see the submission
+        // form in core/module-browser.js, which deliberately omits this field). Marks a
+        // module the maintainer personally vouches for, as opposed to an unreviewed
+        // community submission that just happens to be listed.
+        official: Boolean(raw.official),
     };
 }
 

@@ -279,6 +279,17 @@
 .stme-browser-toolbar input[type="search"] { flex: 1; min-width: 160px; }
 .stme-browser-filters { display: flex; flex-wrap: wrap; gap: 6px; }
 .stme-browser-filter-chip { padding: 3px 10px; border: 1px dashed color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent); border-radius: 999px; opacity: .55; font-size: .82em; cursor: not-allowed; }
+/* The "Propose a module" submission form — same field styling as the rest of the
+   settings UI, just standing alone (not inside .stme-settings) since it lives in the
+   Browser overlay. */
+.stme-browser-form { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-card); background: rgba(0, 0, 0, .18); }
+.stme-browser-form .stme-field { display: grid; grid-template-columns: minmax(110px, .4fr) 1fr; gap: 10px; align-items: center; }
+.stme-browser-form .stme-field-label { display: flex; flex-direction: column; gap: 1px; }
+.stme-browser-form .stme-field-label small { opacity: .65; font-weight: normal; }
+.stme-browser-form input, .stme-browser-form textarea { min-width: 0; }
+.stme-browser-form-intro { margin: 0; opacity: .75; font-size: .88em; line-height: 1.4; }
+.stme-browser-form-error { margin: 0; color: var(--SmartThemeQuoteColor, #e88); font-size: .85em; }
+.stme-browser-official-badge { padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, #e0b23c 35%, transparent); color: #ffe6a3; font-size: .78em; font-weight: 600; white-space: nowrap; }
 .stme-browser-empty { margin: 30px 0; opacity: .7; text-align: center; }
 .stme-browser-error { color: var(--SmartThemeQuoteColor, #e88); }
 .stme-browser-error .menu_button { margin-top: 8px; }
@@ -308,8 +319,14 @@
 .stme-launcher-active { opacity: 1 !important; color: var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)); }
 
 /* Full-screen panel: a real "app" entry point alongside the drawer, not a replacement
-   for it — appended to document.body, above everything else in the page. */
-.stme-fullscreen { position: fixed; inset: 0; z-index: 6000; display: flex; flex-direction: column; background: var(--SmartThemeBlurTintColor); color: var(--SmartThemeBodyColor); font-family: var(--mainFontFamily, inherit); }
+   for it — appended to document.body, above everything else in the page.
+   --SmartThemeBlurTintColor is deliberately translucent (it's meant for a small
+   in-drawer panel sitting over the page) — used alone here it left the real ST page
+   showing through behind this full-viewport panel strongly enough that button/text
+   contrast broke down. Stacking a near-opaque dark wash UNDER it (first background
+   layer paints on top in CSS) keeps a hint of the theme's own tint while guaranteeing
+   ~95% opacity regardless of how translucent the theme token itself is. */
+.stme-fullscreen { position: fixed; inset: 0; z-index: 6000; display: flex; flex-direction: column; background: linear-gradient(rgba(10, 10, 12, .95), rgba(10, 10, 12, .95)), var(--SmartThemeBlurTintColor); color: var(--SmartThemeBodyColor); font-family: var(--mainFontFamily, inherit); }
 .stme-fullscreen[hidden] { display: none; }
 .stme-fullscreen-head { display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff))); background: linear-gradient(105deg, transparent, rgba(0, 0, 0, .12)); }
 .stme-fullscreen-head strong { flex: 1; font-size: 1.05em; letter-spacing: .02em; }

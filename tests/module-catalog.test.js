@@ -1,28 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCatalogEntry, fetchCatalog, DEFAULT_CATALOG_URL } from '../core/module-catalog.js';
+import { parseCatalogEntry, fetchCatalog, DEFAULT_CATALOG_URL, CATALOG_REPO_URL, CATALOG_REPO_BRANCH } from '../core/module-catalog.js';
 
 test('parseCatalogEntry accepts a full entry and normalizes every field to a string (or null)', () => {
     const entry = parseCatalogEntry({
         id: 'dice-roller', title: 'Dice Roller', url: 'https://github.com/x/y/blob/main/index.js',
         description: 'Rolls dice.', author: 'someone', version: '1.2.0',
         repo: 'https://github.com/x/y', tags: ['utility', 'chat'], minEngineVersion: '0.1.0',
-        updatedAt: '2026-08-01', extraField: 'ignored',
+        updatedAt: '2026-08-01', official: true, extraField: 'ignored',
     });
     assert.deepEqual(entry, {
         id: 'dice-roller', title: 'Dice Roller', url: 'https://github.com/x/y/blob/main/index.js',
         description: 'Rolls dice.', author: 'someone', version: '1.2.0', repo: 'https://github.com/x/y',
-        tags: ['utility', 'chat'], minEngineVersion: '0.1.0', updatedAt: '2026-08-01',
+        tags: ['utility', 'chat'], minEngineVersion: '0.1.0', updatedAt: '2026-08-01', official: true,
     });
     assert.equal('extraField' in entry, false, 'unknown fields are dropped, not passed through');
 });
 
-test('parseCatalogEntry defaults optional fields and trims id/title/url', () => {
+test('parseCatalogEntry defaults optional fields (including official:false) and trims id/title/url', () => {
     const entry = parseCatalogEntry({ id: '  dice  ', title: '  Dice  ', url: '  https://x/y.js  ' });
     assert.deepEqual(entry, {
         id: 'dice', title: 'Dice', url: 'https://x/y.js', description: '', author: null, version: null,
-        repo: null, tags: [], minEngineVersion: null, updatedAt: null,
+        repo: null, tags: [], minEngineVersion: null, updatedAt: null, official: false,
     });
+});
+
+test('parseCatalogEntry coerces "official" to a real boolean regardless of what the raw value is', () => {
+    assert.equal(parseCatalogEntry({ id: 'x', title: 'X', url: 'https://x', official: true }).official, true);
+    assert.equal(parseCatalogEntry({ id: 'x', title: 'X', url: 'https://x', official: 'true' }).official, true, 'any truthy value counts');
+    assert.equal(parseCatalogEntry({ id: 'x', title: 'X', url: 'https://x', official: 0 }).official, false);
+    assert.equal(parseCatalogEntry({ id: 'x', title: 'X', url: 'https://x' }).official, false, 'omitted defaults to false');
+});
+
+test('CATALOG_REPO_URL/BRANCH point at the same repository as DEFAULT_CATALOG_URL', () => {
+    assert.equal(DEFAULT_CATALOG_URL, `https://raw.githubusercontent.com/IAmiGOI/SillyTavernME-Modules/${CATALOG_REPO_BRANCH}/catalog.json`);
+    assert.equal(CATALOG_REPO_URL, 'https://github.com/IAmiGOI/SillyTavernME-Modules');
 });
 
 test('parseCatalogEntry coerces a non-array "tags" to empty and drops blank tag entries', () => {
