@@ -165,9 +165,19 @@
 #chat .stme-rp-time-label, .mes .stme-rp-time-label { color: var(--SmartThemeBodyColor); opacity: .7; font-size: .72em; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
 #chat .stme-rp-time-value, .mes .stme-rp-time-value { color: var(--SmartThemeBodyColor); font-size: 1.12em; font-weight: 700; letter-spacing: .025em; line-height: 1.25; }
 .stme-settings .stme-module-error { display: flex; flex-direction: column; gap: 9px; color: var(--SmartThemeQuoteColor, #e88); border-left: 3px solid currentColor; background: rgba(160, 35, 35, .12); }
-.stme-settings .stme-sidecar-manager { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }.stme-settings .stme-sidecar-manager-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:4px 2px; }.stme-settings .stme-sidecar-manager-head small { display:block; max-width:360px; opacity:.7; }.stme-settings .stme-sidecar-worker { border:1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-card); }.stme-settings .stme-sidecar-worker > summary { padding: 9px 10px; cursor:pointer; font-weight:700; background:var(--SmartThemeBlurTintColor); border-radius: var(--stme-radius-card) var(--stme-radius-card) 0 0; }.stme-settings .stme-sidecar-worker .stme-sidecar { margin:0; border:0; border-radius: 0 0 var(--stme-radius-card) var(--stme-radius-card); }
+.stme-settings .stme-sidecar-manager { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
+/* Just the "+ SideCar" button now — the manager used to repeat its own title/description
+   here, directly under the outer card's already-identical header, which read as a
+   visual glitch (a stray seam between two near-duplicate title bars). */
+.stme-settings .stme-sidecar-manager-head { display: flex; justify-content: flex-end; padding: 0 2px; }
+.stme-settings .stme-sidecar-worker { border:1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-card); }.stme-settings .stme-sidecar-worker > summary { padding: 9px 10px; cursor:pointer; font-weight:700; background:var(--SmartThemeBlurTintColor); border-radius: var(--stme-radius-card) var(--stme-radius-card) 0 0; }.stme-settings .stme-sidecar-worker .stme-sidecar { margin:0; border:0; border-radius: 0 0 var(--stme-radius-card) var(--stme-radius-card); }
+/* Blinking blue border: SideCar unconfigured (nothing enabled+endpoint at all), or the
+   silent startup connectivity probe (ModuleEngine.start() -> SidecarManager.checkHealth())
+   found nothing reachable. No toast/banner — this border IS the whole notification,
+   deliberately, so it never interrupts anything at the top of the ST page. */
+@keyframes stme-sidecar-blink { 0%, 100% { border-color: color-mix(in srgb, var(--SmartThemeBorderColor) 78%, var(--stme-accent)); box-shadow: 0 3px 14px rgba(0, 0, 0, .13); } 50% { border-color: #4a90ff; box-shadow: 0 0 0 3px rgba(74, 144, 255, .35), 0 3px 14px rgba(0, 0, 0, .13); } }
+.stme-settings .stme-base-card.stme-sidecar-unhealthy { animation: stme-sidecar-blink 1.6s ease-in-out infinite; }
 .stme-settings .stme-sidecar-worker > summary { display:flex; align-items:center; justify-content:space-between; gap:8px; }.stme-settings .stme-worker-remove { font-size:.8em; color:#f2b4b4; }
-.stme-settings .stme-loader { display:flex; gap:8px; align-items:center; }.stme-settings .stme-loader input { flex:1; min-width:0; }
 
 /* core/widgets.js: shared building blocks used across every module's render(). */
 .stme-settings .stme-field { display: grid; grid-template-columns: minmax(110px, .4fr) 1fr; gap: 10px; align-items: center; }
@@ -297,17 +307,29 @@
    settings UI, just standing alone (not inside .stme-settings) since it lives in the
    Browser overlay. */
 .stme-browser-form { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-card); background: rgba(0, 0, 0, .18); }
+/* A plain class selector's own `display` always beats the UA stylesheet's [hidden]
+   rule at equal specificity (author styles win ties) — without this, toggling the
+   `hidden` property left the form laid out and visible regardless (confirmed: this
+   is the exact same trap already fixed once for .stme-dev-panel[hidden] below). */
+.stme-browser-form[hidden] { display: none; }
 .stme-browser-form .stme-field { display: grid; grid-template-columns: minmax(110px, .4fr) 1fr; gap: 10px; align-items: center; }
 .stme-browser-form .stme-field-label { display: flex; flex-direction: column; gap: 1px; }
 .stme-browser-form .stme-field-label small { opacity: .65; font-weight: normal; }
 .stme-browser-form input, .stme-browser-form textarea { min-width: 0; }
 .stme-browser-form-intro { margin: 0; opacity: .75; font-size: .88em; line-height: 1.4; }
 .stme-browser-form-error { margin: 0; color: var(--SmartThemeQuoteColor, #e88); font-size: .85em; }
+/* Load-from-a-link section (relocated from the old standalone Module Loader card). */
+.stme-browser-load { display: flex; flex-direction: column; gap: 6px; }
+.stme-browser-load-head { display: flex; flex-direction: column; gap: 1px; }
+.stme-browser-load-head small { opacity: .65; }
+.stme-browser-load-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.stme-browser-load-row input { flex: 1; min-width: 220px; }
 .stme-browser-official-badge { padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, #e0b23c 35%, transparent); color: #ffe6a3; font-size: .78em; font-weight: 600; white-space: nowrap; }
 .stme-browser-empty { margin: 30px 0; opacity: .7; text-align: center; }
 .stme-browser-error { color: var(--SmartThemeQuoteColor, #e88); }
 .stme-browser-error .menu_button { margin-top: 8px; }
 .stme-browser-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.stme-browser-grid[hidden] { display: none; }
 @container (min-width: 640px) { .stme-browser-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); } }
 .stme-browser-card { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-card); background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, transparent); min-width: 0; }
 /* Installed cards read as "already yours" — dimmed border instead of the normal

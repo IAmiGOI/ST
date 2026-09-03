@@ -224,8 +224,14 @@ export class SidecarService {
         return String(data.candidates?.[0]?.content?.parts?.[0]?.text ?? '').trim();
     }
 
-    /** Builds the SideCar form once. Connection fields are shared; sampler/reasoning fields reload per selected profile. */
-    render(container, toast, includeHeader = true) {
+    /**
+     * Builds the SideCar form once. Connection fields are shared; sampler/reasoning
+     * fields reload per selected profile. `onChange`, if given, is called after Save
+     * or after Test connection settles (either way) — SidecarManager passes its own
+     * checkHealth() so the outer card's blinking state reacts to a manual save/test
+     * immediately, not just on the next page load.
+     */
+    render(container, toast, includeHeader = true, onChange) {
         const settings = this.settings();
 
         const profileId = signal(this.#editingProfile);
@@ -310,6 +316,7 @@ export class SidecarService {
                         this.settings().profiles[this.#editingProfile] = this.profile(this.#editingProfile);
                         this.#save();
                         toast('success', 'SideCar profile saved.', 'SideCar');
+                        onChange?.();
                     }),
                     ' ',
                     Button('Test connection', async event => {
@@ -323,6 +330,7 @@ export class SidecarService {
                             toast('error', error?.message || String(error), 'SideCar');
                         } finally {
                             button.disabled = false;
+                            onChange?.();
                         }
                     }),
                 ),

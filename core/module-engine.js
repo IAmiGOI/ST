@@ -1,6 +1,6 @@
 import { SidecarManager } from './sidecar-manager.js';
 import { ModuleDataBus } from './data-bus.js';
-import { h, show, signal, computed, effectOn, Button, TextInput, Toggle, DraggableList, InfoDot } from './widgets.js';
+import { h, show, signal, computed, effectOn, Button, Toggle, DraggableList, InfoDot } from './widgets.js';
 import { createDevPanel } from './dev-panel.js';
 import { resolveModuleUrl } from './module-loader.js';
 
@@ -146,6 +146,12 @@ export class ModuleEngine {
         for (const module of this.#modules.values()) {
             if (this.isEnabled(module.id)) await this.enable(module.id);
         }
+
+        // Fire-and-forget: a silent connectivity probe of whatever SideCar is
+        // currently configured, once per page load. Never awaited (must not delay
+        // boot on a network round trip) and never toasts — mount()'s effectOn below
+        // is what turns a failed/missing result into the blinking card border.
+        this.sidecar.checkHealth();
 
         const context = this.getContext();
         if (context.eventTypes?.CHAT_CHANGED && context.eventSource?.on) {
@@ -353,9 +359,12 @@ export class ModuleEngine {
         const sidecarContent = h('div', {});
         sidecarCard.append(sidecarHeader, sidecarContent);
         this.sidecar.render(sidecarContent, (level, message, title) => this.#toast(level, message, title));
+        // Blinking blue border, no toast: reacts to SidecarManager.healthy (null =
+        // not checked yet, no blink; false = nothing configured, or the silent
+        // startup probe in start() found nothing reachable; true = at least one
+        // worker answered). See SidecarManager's own doc comment on `healthy`.
+        effectOn(sidecarCard, () => { sidecarCard.classList.toggle('stme-sidecar-unhealthy', this.sidecar.healthy() === false); });
         baseList.append(sidecarCard);
-
-        baseList.append(this.#renderModuleLoader());
 
         // Not a module, not nested in either list above — a floating window
         // toggled from one button at the very bottom of the whole drawer, so it
@@ -536,38 +545,6 @@ export class ModuleEngine {
         await this.unregister(id);
         await this.#loadRemoteModule(sourceUrl);
         this.#moduleUpdateInfo.update(map => { if (!(id in map)) return map; const next = { ...map }; delete next[id]; return next; });
-    }
-
-    #renderModuleLoader() {
-        const url = signal('');
-        const busy = signal(false);
-        const checking = signal(false);
-        const card = h('details', { class: 'stme-base-card' });
-        const header = h('summary', { class: 'stme-module-header' },
-            h('div', {}, h('strong', {}, 'Module loader', InfoDot('Lets you add a new tool to this extension by pasting a link, instead of installing and managing a whole separate extension for every single feature.')), h('small', {}, 'Load a self-contained module from a GitHub repo or a direct .js link.')));
-        const content = h('div', { class: 'stme-module-content stme-loader' },
-            TextInput(url, { type: 'url', placeholder: 'https://github.com/user/repo (or a direct .js URL)' }),
-            Button('Load module', async () => {
-                busy.set(true);
-                try {
-                    await this.#loadRemoteModule(url.peek());
-                    this.#toast('success', 'Module loaded.', 'ST Module Engine');
-                } catch (error) {
-                    this.#log('error', 'loader', error?.message || String(error), error);
-                    this.#toast('error', error?.message || String(error), 'Module loader');
-                } finally { busy.set(false); }
-            }),
-            Button('Check for updates', async () => {
-                checking.set(true);
-                try {
-                    const count = await this.checkAllModuleUpdates();
-                    this.#toast('success', count ? `Checked ${count} loaded module(s).` : 'No externally-loaded modules to check.', 'ST Module Engine');
-                } finally { checking.set(false); }
-            }),
-        );
-        effectOn(content, () => { const buttons = content.querySelectorAll('button'); buttons[0].disabled = busy(); buttons[1].disabled = checking(); });
-        card.append(header, content);
-        return card;
     }
 
     #hostFor(module) {

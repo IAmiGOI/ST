@@ -16,7 +16,11 @@ import { ENGINE_VERSION, compareVersions } from './module-engine.js';
  * go. Everything else (fetching the catalog, showing compatibility/installed state,
  * actually installing) is real.
  *
- * `engine` needs: installModule(url), listModuleStates().
+ * `engine` needs: installModule(url), listModuleStates(), checkAllModuleUpdates().
+ * This is also the ONLY place a module can be loaded from a raw link — the old
+ * standalone "Module loader" card (core/module-engine.js) was merged in here so
+ * "how do I get a module into the engine" has a single home, catalog browsing and
+ * direct-link loading side by side.
  */
 export function createModuleBrowserPanel(engine) {
     const visible = signal(false);
@@ -53,6 +57,44 @@ export function createModuleBrowserPanel(engine) {
             installingIds.update(ids => { const next = new Set(ids); next.delete(entry.id); return next; });
         }
     }
+
+    // --- Load a module directly from a link — the same mechanism the catalog's own
+    // "Install" button uses (engine.installModule()), just for a URL you already have
+    // (a repo not yet in the catalog, a friend's fork, your own work in progress)
+    // instead of one picked from a card below. Lives here, not as its own separate
+    // card elsewhere, so "how do I get a module into the engine" has one home.
+    const loadUrl = signal('');
+    const loadBusy = signal(false);
+    const checkingUpdates = signal(false);
+    const loadButton = Button('Load module', async () => {
+        loadBusy.set(true);
+        try {
+            await engine.installModule(loadUrl.peek());
+            window.toastr?.success?.('Module loaded.', 'ST Module Engine');
+            loadUrl.set('');
+        } catch (error) {
+            window.toastr?.error?.(error?.message || String(error), 'Module loader');
+        } finally { loadBusy.set(false); }
+    });
+    const checkUpdatesButton = Button('Check for updates', async () => {
+        checkingUpdates.set(true);
+        try {
+            const count = await engine.checkAllModuleUpdates();
+            window.toastr?.success?.(count ? `Checked ${count} loaded module(s).` : 'No externally-loaded modules to check.', 'ST Module Engine');
+        } finally { checkingUpdates.set(false); }
+    });
+    const loadSection = h('div', { class: 'stme-browser-load' },
+        h('div', { class: 'stme-browser-load-head' },
+            h('strong', {}, 'Load from a link'),
+            h('small', {}, 'A GitHub repo or a direct .js URL — for anything not in the catalog above.'),
+        ),
+        h('div', { class: 'stme-browser-load-row' },
+            TextInput(loadUrl, { type: 'url', placeholder: 'https://github.com/user/repo (or a direct .js URL)' }),
+            loadButton,
+            checkUpdatesButton,
+        ),
+    );
+    effectOn(loadSection, () => { loadButton.disabled = loadBusy(); checkUpdatesButton.disabled = checkingUpdates(); });
 
     // --- "Propose a module" — generates a GitHub link that creates a new file
     // (submissions/<id>.json) in the catalog repo and opens it pre-filled. GitHub's
@@ -190,6 +232,7 @@ export function createModuleBrowserPanel(engine) {
             Button('↻ Refresh', () => load()),
             Button('+ Propose a module', () => showForm.update(v => !v)),
         ),
+        loadSection,
         submissionForm,
         loadingState,
         errorState,
