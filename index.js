@@ -1,11 +1,11 @@
 import { ModuleEngine } from './core/module-engine.js';
 import { createFullScreenPanel } from './core/full-screen-panel.js';
+import { LorebookService } from './core/lorebook-service.js';
 import { effect } from './core/reactive.js';
 import { notebookModule } from './modules/notebook/index.js';
 import { timeModule } from './modules/time/index.js';
 import { trackerModule } from './modules/tracker/index.js';
 import { musicModule } from './modules/music/index.js';
-import { lorebookModule } from './modules/lorebook/index.js';
 
 // The drawer lives in JavaScript so the extension works regardless of its
 // installation folder name and never depends on a fetched template file.
@@ -35,7 +35,6 @@ async function init() {
     engine.register(timeModule);
     engine.register(trackerModule);
     engine.register(musicModule);
-    engine.register(lorebookModule);
     await engine.start();
 
     const target = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
@@ -46,8 +45,15 @@ async function init() {
     const fullScreenPanel = createFullScreenPanel(engine);
     addTopBarLauncher(fullScreenPanel);
 
+    // Independent of ModuleEngine on purpose — see MODULES.md's "Independent core
+    // services" section. Talks to the rest of the system only through the shared bus
+    // (engine.bus); other code reaches it via host.data.read('lorebook', 'api').
+    const lorebook = new LorebookService(getContext, engine.bus);
+    await lorebook.start();
+
     window.STModuleEngine = engine;
-    console.info('[ST Module Engine] Started with Notebook, RP Time, Tracker, Music and Lorebook Scan modules.');
+    window.STModuleEngineLorebook = lorebook;
+    console.info('[ST Module Engine] Started with Notebook, RP Time, Tracker and Music modules, plus the independent Lorebook service.');
 }
 
 /**

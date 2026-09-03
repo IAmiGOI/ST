@@ -764,20 +764,63 @@ RP Time fires a SideCar request on `GENERATION_STARTED` and applies the result a
 module stores its result in `message.extra`, so the model's actual reply text is never
 rewritten. The time badge is appended by plain DOM code after the message renders.
 
-## Lorebook Scan as an example of a read-only external-data provider
+## Independent core services
 
-`modules/lorebook/index.js` reads whichever World Info book is bound to the current
-chat/character (`context.chatMetadata.world_info` + `character.data.extensions.world`,
-via ST's own `context.loadWorldInfo()`) and republishes it on the bus as **metadata
-only** — `uid`, `book`, `name`, `keys`, `length`, `disabled`, `constant` — deliberately
-never `content`, so the bus index never carries a lorebook's full text weight. It then
-layers `host.services.register('lorebook', { find(filter), get(uid) })` on top:
-`find({ name, minLength, maxLength, key, disabled, constant })` filters the metadata
-index (every field optional), and `get(uid)` returns one entry's full record —
-`content` included — only when something actually needs the text. This is the pattern
-to follow for "read something from ST, republish a light index, offer a richer query on
-top" — the module itself never writes anything back into the source of truth (the
-lorebook file), it only observes and re-scans on `host.onChatChanged`.
+Not everything the engine provides is a module, and not everything module-shaped is
+owned by `ModuleEngine`. There are two other categories:
+
+**`host.sidecar`** — engine-owned, instantiated inside `ModuleEngine` itself
+(`this.sidecar = new SidecarManager(...)`), exposed directly on `host`. Always
+available (once the user configures it), no Enabled toggle, no card in the Modules
+list — its own card lives under **Base settings**.
+
+**`core/lorebook-service.js`'s `LorebookService`** — one step further: not just
+outside the Modules list, but outside `ModuleEngine` entirely. `index.js` constructs
+and starts it as a **sibling** to `ModuleEngine`, and the two talk to each other only
+through the shared `ModuleDataBus` (`engine.bus`) — `core/module-engine.js` has no
+import of, or reference to, `LorebookService` anywhere. A module reaches it purely via
+the bus, using the same "publish a callable object" idiom `modules/tracker/index.js`'s
+own `publish()` already relies on (see
+[DOM nodes and functions on the bus](#dom-nodes-and-functions-on-the-bus--allowed-but-its-a-private-rpc-not-a-public-contract)):
+
+```js
+const lorebook = host.data.read('lorebook', 'api');
+const results = lorebook.find({ key: 'dragon' });        // metadata-only query
+const full = lorebook.get(results[0].uid);                // one entry, content included
+const created = await lorebook.createEntry({ comment: 'New Entry', content: '...' });
+const unsubscribe = lorebook.on('entryCreated', entry => { /* ... */ });
+```
+
+It reads whichever World Info book is bound to the current chat/character
+(`context.chatMetadata.world_info` + `character.data.extensions.world`, via ST's own
+`context.loadWorldInfo()`/`context.saveWorldInfo()`) and republishes a **metadata-only**
+index on the bus — `uid`, `book`, `name`, `keys`, `length`, `disabled`, `constant`,
+deliberately never `content` — so the index itself never carries a lorebook's full text
+weight; `get(uid)` fetches one entry's full record only when something actually needs
+the text.
+
+Beyond reading, it's a real read/write store with events —
+`createEntry(patch, { book? })` / `updateEntry(uid, patch)` / `deleteEntry(uid)` each do
+a read-modify-write against ST's own file (load the whole book, touch only the one
+entry, save the whole object back — so anything else the file contains is left alone)
+and, once the resulting re-scan has already updated the index, fire `'entryCreated'` /
+`'entryUpdated'` / `'entryDeleted'` (plus `'scan'` on every scan, chat-change-triggered
+or not) via a small internal `core/event-emitter.js`. Why go this far for something
+that today is "just" a lorebook reader: the plan is for World Info to end up as one
+possible storage backend under a bigger system — the actual node/connection graph
+owned by the engine side, not by WI's own structure — and neither of those things (the
+node graph, or a different backend) can be built later without a rewrite unless this
+piece is already decoupled from `ModuleEngine` and shaped like a mutable, observable
+store rather than "a WI-specific reader." Nothing graph-shaped exists yet — this is
+only about not painting that door shut.
+
+**Practical rule of thumb**: reach for this shape (independent class + `index.js`
+constructs/starts it + bus-only) when a capability isn't "a module a user enables" and
+isn't a natural extension of `ModuleEngine`'s own job (module lifecycle/UI) — not for
+every core-ish idea. `host.sidecar` staying inside `ModuleEngine` and `LorebookService`
+living outside it are both deliberate, not inconsistent: SideCar is intrinsic to what
+the engine already does for every module (give it a model); Lorebook's future shape is
+explicitly meant to grow past what `ModuleEngine` is about.
 
 ## Recommendations
 
