@@ -14,7 +14,6 @@ import { macrosModule } from './modules/macros/index.js';
 // See core/self-update.js — needs this exact script's own URL, which only index.js
 // (the real entry point ST imports) can supply via import.meta.url.
 const EXTENSION_NAME = deriveExtensionName(import.meta.url);
-const EXTENSION_IS_GLOBAL = isGlobalInstall(import.meta.url);
 // This extension's own root — the ONLY thing index.js passes to ModuleEngine's
 // constructor beyond getContext. Lets DependencyScanner's scanServiceContracts()
 // (via ModuleEngine's #moduleSourceUrl) fetch a BUILT-IN module's own raw source
@@ -117,14 +116,19 @@ function removeUpdateBanner() {
 async function attemptCoreUpdate() {
     if (!EXTENSION_NAME) return;
     const context = getContext();
-    const status = await checkCoreUpdate(context, EXTENSION_NAME, { global: EXTENSION_IS_GLOBAL });
+    // Asked fresh each call (never cached) — this runs at most twice a session (boot,
+    // plus a possible manual Retry), so a real /discover round trip here is cheap and
+    // avoids ever acting on a stale global/local classification. See isGlobalInstall's
+    // own doc comment for why this can no longer be derived from the URL alone.
+    const global = await isGlobalInstall(EXTENSION_NAME, context);
+    const status = await checkCoreUpdate(context, EXTENSION_NAME, { global });
     if (!status.checked) return;
     logUpdateDiagnostic(status); // fire-and-forget — see below; never blocks or affects the real flow
     if (status.upToDate) { removeUpdateBanner(); return; }
 
     sessionStorage.setItem(UPDATE_SESSION_FLAG, String(Date.now()));
     const overlay = renderBlockingOverlay();
-    const result = await applyCoreUpdate(context, EXTENSION_NAME, { global: EXTENSION_IS_GLOBAL });
+    const result = await applyCoreUpdate(context, EXTENSION_NAME, { global });
     if (result.applied) { window.location.reload(); return; }
     overlay.remove();
     renderUpdateBanner();

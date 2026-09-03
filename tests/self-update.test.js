@@ -14,11 +14,37 @@ test('deriveExtensionName is null (never throws) for anything that does not matc
     assert.equal(deriveExtensionName(''), null);
 });
 
-test('isGlobalInstall is true only for a script served from the shared third-party directory', () => {
-    assert.equal(isGlobalInstall('https://host/scripts/extensions/third-party/ST/index.js'), true);
-    assert.equal(isGlobalInstall('https://host/scripts/extensions/ST/index.js'), false, 'per-user install — no third-party segment');
-    assert.equal(isGlobalInstall('https://host/some/other/path.js'), false);
-    assert.equal(isGlobalInstall(undefined), false);
+test('isGlobalInstall asks the server via /api/extensions/discover and matches this extension by name (bare, or "third-party/<name>")', async () => {
+    const { context, restore } = makeContext(async url => {
+        assert.equal(url, '/api/extensions/discover');
+        return { ok: true, json: async () => ([{ type: 'system', name: 'quick-reply' }, { type: 'global', name: 'third-party/ST' }]) };
+    });
+    try { assert.equal(await isGlobalInstall('ST', context), true); } finally { restore(); }
+});
+
+test('isGlobalInstall is false for a "local" (per-user) entry — the exact case a URL heuristic used to get wrong', async () => {
+    // Both 'local' and 'global' installs share the identical "third-party/<name>" URL
+    // prefix server-side — this is precisely why the old import.meta.url-based check
+    // could never tell them apart and had to be replaced with a real server lookup.
+    const { context, restore } = makeContext(async () => ({ ok: true, json: async () => ([{ type: 'local', name: 'third-party/ST' }]) }));
+    try { assert.equal(await isGlobalInstall('ST', context), false); } finally { restore(); }
+});
+
+test('isGlobalInstall is false — never throws — with no extensionName, a discover() failure, a non-array body, or no matching entry', async () => {
+    const { context: noName } = makeContext(async () => { throw new Error('must not be called'); });
+    assert.equal(await isGlobalInstall(null, noName), false);
+
+    const { context: notOk, restore: restoreNotOk } = makeContext(async () => ({ ok: false, status: 500 }));
+    try { assert.equal(await isGlobalInstall('ST', notOk), false); } finally { restoreNotOk(); }
+
+    const { context: throws, restore: restoreThrows } = makeContext(async () => { throw new Error('network down'); });
+    try { assert.equal(await isGlobalInstall('ST', throws), false); } finally { restoreThrows(); }
+
+    const { context: malformed, restore: restoreMalformed } = makeContext(async () => ({ ok: true, json: async () => ({ not: 'an array' }) }));
+    try { assert.equal(await isGlobalInstall('ST', malformed), false); } finally { restoreMalformed(); }
+
+    const { context: noMatch, restore: restoreNoMatch } = makeContext(async () => ({ ok: true, json: async () => ([{ type: 'global', name: 'third-party/SomeOtherExtension' }]) }));
+    try { assert.equal(await isGlobalInstall('ST', noMatch), false); } finally { restoreNoMatch(); }
 });
 
 function makeContext(fetchImpl) {
