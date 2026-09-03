@@ -73,7 +73,7 @@ nothing runs, requests a model, or does background work until you turn it on.
 
 ## What's in the box
 
-Five modules ship built in. Only **Notebook** is on by default; the rest are
+Six modules ship built in. Only **Notebook** is on by default; the rest are
 opt-in because they either need a model configured first, or are niche
 enough that most people don't want them running unasked.
 
@@ -84,6 +84,7 @@ enough that most people don't want them running unasked.
 | **Tracker** | ⬜ no | Any number of stat blocks (health, mood, relationship meters, anything JSON-shaped) kept up to date automatically, each with its own model profile. |
 | **Music** | ⬜ no | A local audio player that picks tracks by scene — tag your files with keys like `combat`/`tavern`/`night`, and it classifies each new scene and plays a fitting, non-repeating track. |
 | **Macros** | ⬜ no | Define your own `{{macro}}` values — a fixed line of text, or a tiny sandboxed program that computes something from other modules' live data. |
+| **Post-Turn Processor** | ⬜ no | Runs each fresh reply through a chain of independent rewrite passes (own instruction, own model profile per pass — inspired by the [ReCast](https://github.com/closuretxt/recast-post-processing) extension) and replaces the message with the final result. |
 
 Each one is a card in the drawer: a toggle, its own settings, and (for
 Tracker and Music) an optional floating window you can drag around
@@ -140,6 +141,7 @@ flowchart TB
     Tracker -.registers.-> Engine
     Music -.registers.-> Engine
     Macros -.registers.-> Engine
+    PostTurn["Post-Turn Processor"] -.registers.-> Engine
     Engine --> Bus["Shared data bus"]
     Engine --> SideCar["Shared SideCar\n(the model connection)"]
     Engine --> DevPanel["Dev panel\n(diagnostics, opt-in)"]
