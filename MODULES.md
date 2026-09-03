@@ -327,6 +327,9 @@ const channel = host.data.reserve('health', {
   schema: { type: 'string' },        // or a function (value) => true | 'error text'
   allowExternalWrite: false,         // by default only the owner can write
   macro: 'tracker_vitals_health',    // see "Three kinds of channels" below
+  compute: () => 'live value',       // OPTIONAL — see "Macros" below: a `() => string`
+                                      // called fresh on every {{macro}} resolution instead
+                                      // of the usual "last value set() wrote" passthrough
   webhook: { pushUrl, pullUrl, pullIntervalMs },
   persist: true,                     // see "Persistence within a chat" below
 });
@@ -842,9 +845,17 @@ the Module Loader.
 
 ### Core self-update
 
-`index.js` calls `attemptCoreUpdate()` once per browser session (guarded by a
-`sessionStorage` flag, `stme_update_attempted`, so a failed attempt never turns into a
-reload loop), before anything else boots. It uses SillyTavern's own git-based
+`index.js` calls `attemptCoreUpdate()` before anything else boots, gated by a
+`sessionStorage` timestamp (`stme_update_attempted`, checked via
+`updateRecentlyAttempted()`): a fresh automatic attempt is skipped only within
+`UPDATE_RETRY_COOLDOWN_MS` (20s) of the last one, so a broken update can't loop
+forever, but reloading again later — the normal "did my commits land yet" workflow —
+still gets a genuinely fresh check. This used to be a flat boolean flag; that silently
+blocked every check for the rest of the tab's lifetime after the first successful
+auto-update, since `sessionStorage` survives reloads by design and a plain "have we
+ever tried" flag never resets on its own — confirmed as a real bug, not just a
+theoretical one. The manual Retry button on the failure banner calls
+`attemptCoreUpdate()` directly, bypassing this cooldown entirely. It uses SillyTavern's own git-based
 extension-update endpoints — the same ones behind the "Update" button in ST's own
 Extensions manager — wrapped in `core/self-update.js`:
 
@@ -990,6 +1001,62 @@ UI wired to it yet:
   same download-resolve-import-register-enable sequence the Module Loader card's
   "Load module" button already uses (`#loadRemoteModule`, private) — just callable
   without a DOM text field + button click in between.
+
+## Macros: a sandboxed language for computed values
+
+`modules/macros/index.js` lets a user define their own `{{macro}}` values directly —
+either a fixed string, or a small program that reads/computes values on the bus. Macro
+code can end up in a shared preset/character card/catalog module, so the trust model
+is "this might be someone else's code," not "I trust myself" — that shaped the design:
+
+- **Not JavaScript.** `modules/macros/language.js` is a small hand-rolled tokenizer →
+  parser → tree-walking interpreter — no `eval`/`Function` anywhere. Safety comes from
+  what the grammar can express at all: `window`/`document`/`fetch`/other modules
+  aren't blocked, they're simply inexpressible. There is no call syntax beyond two
+  built-ins (`get`/`save`).
+- **Word-based control flow, ordinary math symbols**: `set x to 5`, `if x > 5 then …
+  else … end`, `repeat 5 times … end`, `while x < 5 … end`, `return x`. One statement
+  per line, no braces/semicolons.
+- **`get "namespace:key"`** (expression) reads ANY bus value, read-only, via
+  `host.data.read()` — how a macro does math on another module's published state
+  (e.g. `get "tracker:field:vitals:health"`). A bareword with no colon
+  (`get "count"`) instead reads THIS PROGRAM's own previously `save`d state.
+- **`save value as "key"`** (statement) writes only into the Macros module's own
+  namespace (`host.data.set()` is namespace-locked to the caller by construction —
+  no extra guardrail code needed) — this is how a macro "remembers" something across
+  resolutions (a counter, a last-computed value); state lives on the bus, not in
+  hidden interpreter state.
+- **Fixed, non-configurable time limit** (`DEFAULT_TIME_LIMIT_MS` in `language.js`,
+  50ms) — checked at fine granularity (every statement, every loop iteration), so
+  the wall-clock check itself is the enforcement, not a step-count proxy. A
+  user-settable limit would defeat the point of a hard guardrail, so this isn't a
+  setting anywhere. A loop-iteration cap (`MAX_LOOP_ITERATIONS`, 100000) is a second,
+  independent backstop for the pathological case where the clock doesn't advance
+  between checks — on very fast hardware with a trivial (empty-body) loop, this can
+  legitimately fire before the wall-clock check does; both are correct, safe aborts,
+  which one fires is an implementation detail (see `tests/macros-language.test.js`'s
+  own comment on this).
+- **On any failure** (parse error, runtime error, or the time limit), `{{macro}}`
+  resolves to a visible placeholder (`[macro error: <name>]`), never a silent empty
+  string — real error detail goes to `console.error` and to that program's own status
+  channel (`macros:status:<programId>`, subscribed to by its settings card), never
+  into the placeholder itself.
+- **The `compute` option on `reserve()`** (see the Reservation section above) is what
+  makes a channel's macro *live* — `#registerMacro`'s handler calls `compute()` fresh
+  on every `{{macro}}` resolution instead of returning the last value `set()` wrote,
+  and reuses the SAME macro-name collision map and dual `context.macros.register`/
+  legacy `context.registerMacro` fallback every other macro already goes through — a
+  Macros-module program and, say, a Tracker field macro correctly refuse to share a
+  name. A `compute()` that throws is caught right there in the bus (defense in
+  depth) and resolves to `''` — in practice this never happens, since
+  `modules/macros/index.js`'s own `runProgram()` already turns every failure into the
+  placeholder string itself before it ever reaches the bus.
+- **Plain-text macros** don't touch any of the above — `kind: 'text'` just
+  `reserve()`s the channel with `macro` set and `set()`s the fixed string once,
+  reusing the ordinary value-passthrough macro path unchanged.
+- The module's own UI has an in-app "How to write a macro" reference (syntax table +
+  worked examples) — written for the end user typing a macro, not a substitute for
+  this section.
 
 ## Recommendations
 

@@ -8,16 +8,30 @@ import { notebookModule } from './modules/notebook/index.js';
 import { timeModule } from './modules/time/index.js';
 import { trackerModule } from './modules/tracker/index.js';
 import { musicModule } from './modules/music/index.js';
+import { macrosModule } from './modules/macros/index.js';
 
 // See core/self-update.js — needs this exact script's own URL, which only index.js
 // (the real entry point ST imports) can supply via import.meta.url.
 const EXTENSION_NAME = deriveExtensionName(import.meta.url);
 const EXTENSION_IS_GLOBAL = isGlobalInstall(import.meta.url);
-// Guards against a reload loop: an automatic update attempt only ever runs once per
-// browser session (tab), no matter how many times init() itself runs afterward
-// (e.g. a manual page refresh). A failed attempt is communicated via the banner
-// below instead, with a manual Retry that bypasses this guard on purpose.
+// Guards against a reload loop: after an automatic attempt, a fresh one is skipped
+// for a short cooldown — long enough to survive one full check+apply+reload cycle
+// (network calls, a git pull, the reload itself) so a broken update can't loop
+// forever, but short enough that reloading again later (the normal "did my new
+// commits land yet" workflow) still gets a genuinely fresh check. Storing a
+// timestamp rather than a flat boolean matters: a boolean version of this guard was
+// confirmed to silently block every check for the rest of the tab's lifetime after
+// the FIRST successful auto-update — sessionStorage survives reloads by design, so
+// a plain "have we ever tried" flag never resets on its own. A failed attempt is
+// separately communicated via the banner below, with a manual Retry that bypasses
+// this cooldown entirely (an explicit click should never be silently ignored).
 const UPDATE_SESSION_FLAG = 'stme_update_attempted';
+const UPDATE_RETRY_COOLDOWN_MS = 20000;
+
+function updateRecentlyAttempted() {
+    const last = Number(sessionStorage.getItem(UPDATE_SESSION_FLAG) || 0);
+    return Date.now() - last < UPDATE_RETRY_COOLDOWN_MS;
+}
 
 // The drawer lives in JavaScript so the extension works regardless of its
 // installation folder name and never depends on a fetched template file.
@@ -93,7 +107,7 @@ async function attemptCoreUpdate() {
     if (!status.checked) return;
     if (status.upToDate) { removeUpdateBanner(); return; }
 
-    sessionStorage.setItem(UPDATE_SESSION_FLAG, '1');
+    sessionStorage.setItem(UPDATE_SESSION_FLAG, String(Date.now()));
     const overlay = renderBlockingOverlay();
     const result = await applyCoreUpdate(context, EXTENSION_NAME, { global: EXTENSION_IS_GLOBAL });
     if (result.applied) { window.location.reload(); return; }
@@ -107,6 +121,7 @@ async function init() {
     engine.register(timeModule);
     engine.register(trackerModule);
     engine.register(musicModule);
+    engine.register(macrosModule);
     await engine.start();
 
     const target = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
@@ -132,7 +147,7 @@ async function init() {
     window.STModuleEngine = engine;
     window.STModuleEngineLorebook = lorebook;
     window.STModuleEngineBrowser = browserPanel;
-    console.info('[ST Module Engine] Started with Notebook, RP Time, Tracker and Music modules, plus the independent Lorebook service.');
+    console.info('[ST Module Engine] Started with Notebook, RP Time, Tracker, Music and Macros modules, plus the independent Lorebook service.');
 }
 
 /**
@@ -167,7 +182,7 @@ jQuery(async () => {
     try {
         // Runs before anything else boots — a page reload triggered by a successful
         // update means init() below never has to deal with half-loaded state.
-        if (!sessionStorage.getItem(UPDATE_SESSION_FLAG)) await attemptCoreUpdate();
+        if (!updateRecentlyAttempted()) await attemptCoreUpdate();
         await init();
     }
     catch (error) { console.error('[ST Module Engine] Failed to start:', error); }

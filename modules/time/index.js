@@ -144,6 +144,17 @@ export const timeModule = {
         const log = (...args) => console.info('[STME:time]', ...args);
         const warn = (...args) => console.warn('[STME:time]', ...args);
         let pending = null; let running = false;
+
+        // The only sanctioned way another module reads RP Time's current value — see
+        // MODULES.md's host.services section (the same request/provider pattern
+        // Tracker's own track()/classify() service already uses). A consumer checks
+        // host.services.isAvailable('time') first (false while this module is
+        // disabled — registrations are released automatically on disable) rather than
+        // ever reaching into chatMetadata directly.
+        host.services.register('time', {
+            getCurrent: () => getCurrentTime(host.context(), host.moduleSettings(TIME_DEFAULTS)),
+        });
+
         const start = host.onEvent('GENERATION_STARTED', () => {
             if (pending) { log('GENERATION_STARTED ignored — a request is already pending.'); return; }
             if (!host.sidecar.isConfigured()) { warn('GENERATION_STARTED ignored — SideCar is not configured. Per-worker state:', host.sidecar.diagnostics()); return; }

@@ -5,6 +5,20 @@ const TOOL_NAME = 'Notebook';
 const PROMPT_KEY = 'stme_notebook_context';
 const BUS_KEY = 'changed';
 
+/**
+ * RP Time's current value, or null if that module isn't enabled — reached ONLY
+ * through host.services (see MODULES.md's host.services section; the same
+ * request/provider pattern Tracker's own track()/classify() already uses), never by
+ * reading chatMetadata directly. isAvailable() is false while Time is disabled
+ * (service registrations are released automatically on disable), so this needs no
+ * separate "is RP Time on" check of its own.
+ */
+function currentTimestamp(host) {
+    if (!host.services.isAvailable('time')) return null;
+    const value = host.services.request('time').getCurrent?.();
+    return value ? String(value).trim() : null;
+}
+
 export const notebookModule = {
     id: 'notebook',
     title: 'Notebook / Notes',
@@ -56,12 +70,12 @@ export const notebookModule = {
             action: async (args) => {
                 try {
                     if (args?.action === 'write') {
-                        const note = store.add(args.title, args.content); inject(); notify();
+                        const note = store.add(args.title, args.content, currentTimestamp(host)); inject(); notify();
                         return `Saved note "${note.title}" (ID: ${note.id}).${note.removed ? ` Removed ${note.removed} oldest note(s) to stay within capacity.` : ''}`;
                     }
                     if (args?.action === 'update') {
                         if (!args.note_id) return 'update requires note_id.';
-                        const note = store.update(args.note_id, args.title, args.content); inject(); notify();
+                        const note = store.update(args.note_id, args.title, args.content, currentTimestamp(host)); inject(); notify();
                         return `Updated note "${note.title}" (ID: ${note.id}).`;
                     }
                     return 'Unknown action. Use write or update.';
@@ -111,7 +125,7 @@ export const notebookModule = {
             TextArea(contentInput, { rows: 3, placeholder: 'Note content' }),
             Button('+ Add note', () => {
                 try {
-                    const note = store.add(titleInput.peek(), contentInput.peek());
+                    const note = store.add(titleInput.peek(), contentInput.peek(), currentTimestamp(host));
                     titleInput.set(''); contentInput.set('');
                     sync();
                     host.setPrompt(PROMPT_KEY, store.prompt(), 1, store.settings().injectionDepth, 0);
@@ -120,9 +134,16 @@ export const notebookModule = {
             }),
         );
 
+        // Collapsed by default — <details> starts closed, showing only the summary
+        // (title + timestamp) until clicked. A note list can get long; the previous
+        // always-expanded layout meant scrolling past every note's full content just
+        // to find one.
         const noteList = h('div', { class: 'stme-note-list' },
-            list(notes, note => note.id, note => h('article', { class: 'stme-note' },
-                h('strong', {}, note.title),
+            list(notes, note => note.id, note => h('details', { class: 'stme-note' },
+                h('summary', {},
+                    h('strong', {}, note.title),
+                    note.timestamp ? h('span', { class: 'stme-note-timestamp' }, note.timestamp) : null,
+                ),
                 h('div', {}, note.content),
             )),
         );

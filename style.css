@@ -57,8 +57,16 @@
 .stme-settings .stme-note-settings label { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .stme-settings .stme-note-settings input { width: 90px; }
 .stme-settings .stme-note-editor { margin-top: 10px; }
-.stme-settings .stme-note { padding: 8px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-sm); background: var(--SmartThemeBlurTintColor); white-space: pre-wrap; overflow-wrap: anywhere; }
-.stme-settings .stme-note > div { margin-top: 4px; opacity: .9; }
+/* A note is a <details> now (collapsed by default) — only its <summary> (title +
+   RP Time timestamp, if any) shows until clicked open, so a long note list doesn't
+   mean scrolling past every note's full text just to find one. */
+.stme-settings .stme-note { border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-sm); background: var(--SmartThemeBlurTintColor); overflow-wrap: anywhere; }
+.stme-settings .stme-note > summary { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; cursor: pointer; list-style: none; }
+.stme-settings .stme-note > summary::-webkit-details-marker { display: none; }
+.stme-settings .stme-note > summary::after { content: '⌄'; margin-left: auto; opacity: .6; transition: transform .15s ease; }
+.stme-settings .stme-note:not([open]) > summary::after { transform: rotate(-90deg); }
+.stme-settings .stme-note-timestamp { flex-shrink: 0; opacity: .6; font-size: .82em; font-variant-numeric: tabular-nums; }
+.stme-settings .stme-note > div { padding: 0 10px 8px; white-space: pre-wrap; opacity: .9; }
 .stme-settings .stme-sidecar { margin: 10px 0; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius); overflow: hidden; }
 .stme-settings .stme-sidecar > header { padding: 9px 10px; background: var(--SmartThemeBlurTintColor); }
 .stme-settings .stme-sidecar header small { display: block; margin-top: 3px; opacity: .7; }
@@ -372,3 +380,31 @@
    open AND the toggle is on — both classes live on <body>, see full-screen-panel.js. */
 body.stme-fullscreen-open.stme-fullscreen-hide-topbar #top-bar,
 body.stme-fullscreen-open.stme-fullscreen-hide-topbar #top-settings-holder { visibility: hidden; }
+
+/* Macros module (modules/macros/index.js) — cards follow the exact same block-list
+   pattern as Tracker's own (title + Enabled toggle in the header, a form below), so
+   these are the same shapes under a .stme-macro- prefix rather than new ones. */
+.stme-settings .stme-macro-help { margin: 0 0 10px; line-height: 1.4; opacity: .85; }
+.stme-settings .stme-macro-empty { margin: 0 0 10px; padding: 8px; opacity: .65; font-size: .9em; }
+.stme-settings .stme-macro-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.stme-settings .stme-macro-title small { opacity: .65; font-variant-numeric: tabular-nums; }
+.stme-settings .stme-macro-block { display: flex; flex-direction: column; gap: 10px; }
+.stme-settings .stme-macro-code { display: flex; flex-direction: column; gap: 6px; }
+.stme-settings .stme-macro-code textarea { font-family: var(--monoFontFamily, ui-monospace, monospace); font-size: .92em; }
+.stme-settings .stme-macro-code > small { opacity: .65; }
+.stme-settings .stme-macro-actions { display: flex; gap: 8px; }
+.stme-settings .stme-macro-test-result { padding: 6px 8px; border-radius: var(--stme-radius-sm); background: rgba(0, 0, 0, .12); overflow-wrap: anywhere; font-size: .9em; }
+.stme-settings .stme-macro-status { padding: 6px 8px; border-radius: var(--stme-radius-sm); overflow-wrap: anywhere; font-size: .85em; }
+.stme-settings .stme-macro-status-ok { background: color-mix(in srgb, #4caf7d 18%, transparent); }
+.stme-settings .stme-macro-status-error { background: color-mix(in srgb, #c0392b 20%, transparent); color: #ffcfc7; }
+/* Guide — reuses the shared .stme-sampler collapsible-box look (same as Tracker's
+   own "Prompt templates" / SideCar's "Sampler settings"), just with reference
+   content instead of form fields. */
+.stme-settings .stme-macro-guide { margin-bottom: 12px; }
+.stme-settings .stme-macro-guide-body { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; font-size: .9em; line-height: 1.4; }
+.stme-settings .stme-macro-guide-body p { margin: 0; }
+.stme-settings .stme-macro-guide-table { border-collapse: collapse; width: 100%; }
+.stme-settings .stme-macro-guide-table td { padding: 3px 8px 3px 0; vertical-align: top; opacity: .9; }
+.stme-settings .stme-macro-guide-table td:first-child { white-space: nowrap; font-family: var(--monoFontFamily, ui-monospace, monospace); font-size: .88em; opacity: 1; }
+.stme-settings .stme-macro-guide-body pre { margin: 0; padding: 8px 10px; border-radius: var(--stme-radius-sm); background: rgba(0, 0, 0, .18); overflow-x: auto; font-family: var(--monoFontFamily, ui-monospace, monospace); font-size: .85em; white-space: pre; }
+.stme-settings .stme-macro-guide-body code { font-family: var(--monoFontFamily, ui-monospace, monospace); background: rgba(0, 0, 0, .18); border-radius: 4px; padding: 1px 4px; }

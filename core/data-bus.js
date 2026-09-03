@@ -110,14 +110,24 @@ export class ModuleDataBus {
      *
      * `persist: true` backs the channel with `chatMetadata` (point 3: the bus
      * survives a page reload) — see the "Per-chat persistence" section.
+     *
+     * `compute`, if given, is a `() => string` called fresh on every `{{macro}}`
+     * resolution instead of the usual static "last value written via set()"
+     * lookup — this is what lets a channel's macro be a LIVE computation (see
+     * modules/macros/index.js) rather than a passthrough of whatever was last
+     * `set()`. Only meaningful together with `macro`; ignored otherwise. Reuses
+     * this same collision map and the dual `context.macros.register`/legacy
+     * `context.registerMacro` fallback below — a computed macro and a plain
+     * value-passthrough macro (e.g. Tracker's own per-field macros) correctly
+     * refuse to share a name, with no separate registry to keep in sync.
      */
-    reserve(namespace, key, { name, schema, allowExternalWrite = false, macro, webhook, persist = false } = {}) {
+    reserve(namespace, key, { name, schema, allowExternalWrite = false, macro, compute, webhook, persist = false } = {}) {
         const id = this.#id(namespace, key);
         const existing = this.#channels.get(id);
         if (existing?.macro && existing.macro !== macro) this.#unregisterMacro(existing.macro);
         if (existing?.webhook) this.#stopPulling(id);
 
-        const channel = { namespace, key, name, schema, allowExternalWrite, macro, webhook, persist, ownerId: namespace };
+        const channel = { namespace, key, name, schema, allowExternalWrite, macro, compute, webhook, persist, ownerId: namespace };
         this.#channels.set(id, channel);
 
         if (persist && !this.#values.has(id)) {
@@ -130,7 +140,7 @@ export class ModuleDataBus {
             if (collidingId && collidingId !== id) {
                 this.#contaminate({ type: 'macro-collision', id, message: `Macro name "${macro}" is already used by channel "${collidingId}" — not registered for "${id}".` });
             } else {
-                this.#registerMacro(macro, id);
+                this.#registerMacro(macro, id, compute);
                 this.#macros.set(macro, id);
             }
         }
@@ -188,7 +198,8 @@ export class ModuleDataBus {
             .map(channel => ({
                 id: this.#id(channel.namespace, channel.key), namespace: channel.namespace, key: channel.key, name: channel.name ?? null,
                 hasSchema: Boolean(channel.schema), allowExternalWrite: channel.allowExternalWrite, persist: Boolean(channel.persist),
-                macro: channel.macro ?? null, webhook: channel.webhook ? { push: Boolean(channel.webhook.pushUrl), pull: Boolean(channel.webhook.pullUrl) } : null,
+                macro: channel.macro ?? null, computedMacro: Boolean(channel.macro && channel.compute),
+                webhook: channel.webhook ? { push: Boolean(channel.webhook.pushUrl), pull: Boolean(channel.webhook.pullUrl) } : null,
             }));
     }
 
@@ -294,10 +305,19 @@ export class ModuleDataBus {
 
     // --- ST macro exposure (block kind 2: readable anywhere ST itself parses {{macros}}) ---
 
-    #registerMacro(name, id) {
+    #registerMacro(name, id, compute) {
         const context = this.#getContext?.();
         if (!context) { console.warn(`[STME:bus] registerMacro("${name}") for "${id}" skipped — no context available.`); return; }
         const read = () => {
+            if (typeof compute === 'function') {
+                // Belt-and-suspenders only: modules/macros/index.js's own compute()
+                // never throws (it already turns every failure into a visible
+                // placeholder string itself) — this catch exists so a FUTURE
+                // compute() from some other caller can't take every other macro's
+                // resolution down with it if it ever does throw.
+                try { return String(compute() ?? ''); }
+                catch (error) { console.error(`[STME:bus] Computed macro "{{${name}}}" ("${id}") threw:`, error); return ''; }
+            }
             const value = this.#values.get(id);
             if (value == null) return '';
             return typeof value === 'string' ? value : JSON.stringify(value);

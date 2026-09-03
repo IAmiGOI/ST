@@ -43,6 +43,7 @@ function makeHost(chat) {
         moduleSettings: () => settings,
         saveModuleSettings: () => {},
         toast: () => {},
+        services: { register() {}, unregister() {}, isAvailable: () => false, get: () => undefined, request: () => ({}), ask: async () => undefined },
     };
     return { host, listeners };
 }
