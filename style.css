@@ -115,7 +115,20 @@
 .stme-settings .stme-sampler summary small, .stme-settings .stme-reasoning summary small { margin-left: 6px; font-weight: normal; opacity: .62; }
 .stme-settings .stme-reasoning-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 14px; align-items: end; margin-top: 10px; }
 .stme-settings .stme-reasoning-grid > label:not(.stme-slider):not(.stme-check) { display: flex; flex-direction: column; gap: 4px; font-size: .9em; }
-.stme-settings .menu_button { transition: transform .15s ease, filter .15s ease; }
+/* ST's own .menu_button sets width:min-content — for a single short word (typical of
+   ST's own buttons) that's harmless, but min-content for TEXT resolves to the width of
+   the single LONGEST WORD, not the whole label: a multi-word label like "Save SideCar"
+   or "Test connection" gets forced onto two lines even with plenty of room, because
+   min-content refuses to be wider than "SideCar"/"connection" alone. Every one of our
+   own buttons goes through core/widgets.js's Button(), which almost always has a
+   multi-word label, so this needs a blanket override, not a per-button fix. */
+/* flex-shrink: 0 — width:auto alone stops the button from being FORCED to min-content,
+   but inside a flex row (e.g. the "+ SideCar" button next to the SideCar Manager's own
+   description text) it's still a flex item with the default flex-shrink:1, so a tight
+   row can still shrink it back down to min-content (one word per line) when there isn't
+   room for everything. Buttons are the one thing here that should never break like
+   that — let the sibling text wrap instead. */
+.stme-settings .menu_button { width: auto; flex-shrink: 0; transition: transform .15s ease, filter .15s ease; }
 .stme-settings .menu_button:hover { transform: translateY(-1px); filter: brightness(1.08); }
 .stme-settings .stme-profile-row { display:flex; gap:8px; align-items:end; padding:8px; border-radius: var(--stme-radius); background:rgba(0,0,0,.09); }.stme-settings .stme-profile-row label { flex:1; display:flex; flex-direction:column; gap:3px; font-size:.85em; }
 /* This badge is rendered inside chat messages, outside .stme-settings. */

@@ -120,7 +120,12 @@ function renderVocabularySection(vocabulary, persistVocabulary, host) {
 }
 
 function renderTracksSection(tracks, vocabulary, persistTracks, host) {
-    const fileInput = h('input', { type: 'file', accept: 'audio/*', multiple: true });
+    // A bare <input type="file"> has no theme styling of its own — against ST's dark UI
+    // it's effectively invisible (default OS/browser chrome, no visible border/background).
+    // Hide it and trigger it from our own styled Button instead — a standard pattern that
+    // keeps the real native file picker (drag-drop, keyboard access) while looking like
+    // the rest of this UI.
+    const fileInput = h('input', { type: 'file', accept: 'audio/*', multiple: true, hidden: true });
     fileInput.addEventListener('change', async () => {
         const files = [...fileInput.files];
         fileInput.value = '';
@@ -140,7 +145,7 @@ function renderTracksSection(tracks, vocabulary, persistTracks, host) {
         h('div', { class: 'stme-music-section-head' }, h('strong', {}, 'Tracks'), h('small', {}, computed(() => `${tracks().length} imported`))),
         show(computed(() => tracks().length === 0), empty => empty ? h('p', { class: 'stme-music-empty' }, 'No tracks yet — import audio files below.') : null),
         h('div', { class: 'stme-music-track-list' }, list(tracks, track => track.id, track => renderTrackRow(track, tracks, vocabulary, persistTracks, host))),
-        h('div', { class: 'stme-music-track-add' }, Field('Import audio', fileInput, { hint: 'Stored locally in this browser (IndexedDB) — not part of ST\'s own settings export.' })),
+        h('div', { class: 'stme-music-track-add' }, Field('Import audio', h('div', {}, Button('Choose files…', () => fileInput.click()), fileInput), { hint: 'Stored locally in this browser (IndexedDB) — not part of ST\'s own settings export.' })),
     );
 }
 
