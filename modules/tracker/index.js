@@ -875,26 +875,26 @@ export const trackerModule = {
         .stme-settings .stme-tracker-fields-label { display: flex; flex-direction: column; gap: 2px; font-weight: 600; font-size: .9em; opacity: .85; }
         .stme-settings .stme-tracker-fields-label small { font-weight: normal; opacity: .75; }
         .stme-settings .stme-tracker-field-list { display: flex; flex-direction: column; gap: 6px; }
-        .stme-settings .stme-tracker-field-row { display: grid; grid-template-columns: minmax(70px, .3fr) 1fr auto; gap: 8px; align-items: center; padding: 5px 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; background: var(--SmartThemeBlurTintColor); }
+        .stme-settings .stme-tracker-field-row { display: grid; grid-template-columns: minmax(70px, .3fr) 1fr auto; gap: 8px; align-items: center; padding: 5px 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-sm); background: var(--SmartThemeBlurTintColor); }
         .stme-settings .stme-tracker-field-name { font-weight: 700; overflow-wrap: anywhere; }
         .stme-settings .stme-tracker-field-add { display: grid; grid-template-columns: minmax(120px, .35fr) 1fr auto; gap: 8px; align-items: center; }
         .stme-settings .stme-tracker-empty { margin: 0; padding: 8px; opacity: .65; font-size: .9em; }
         .stme-settings .stme-tracker-templates { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-        .stme-settings .stme-tracker-display { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: rgba(0, 0, 0, .06); }
+        .stme-settings .stme-tracker-display { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius); background: rgba(0, 0, 0, .06); }
         .stme-settings .stme-tracker-display-head { display: flex; flex-direction: column; gap: 2px; }
         .stme-settings .stme-tracker-display-head small { opacity: .7; }
         .stme-settings .stme-tracker-tokens { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-        .stme-settings .stme-tracker-current { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; background: rgba(0, 0, 0, .06); }
+        .stme-settings .stme-tracker-current { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius); background: rgba(0, 0, 0, .06); }
         .stme-settings .stme-tracker-current-value { opacity: .85; overflow-wrap: anywhere; }
         .stme-settings .stme-tracker-actions { display: flex; gap: 8px; }
-        .stme-settings .stme-tracker-hud-toggle { padding: 8px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: rgba(0, 0, 0, .05); }
+        .stme-settings .stme-tracker-hud-toggle { padding: 8px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius); background: rgba(0, 0, 0, .05); }
 
         /* Quick tracked values: compact, read-only rows requested by other modules — deliberately no inputs. */
         .stme-settings .stme-tracker-quick { margin-top: 14px; padding-top: 12px; border-top: 1px dashed color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent); }
         .stme-settings .stme-tracker-quick-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
         .stme-settings .stme-tracker-quick-head small { opacity: .65; }
         .stme-settings .stme-tracker-quick-list { display: flex; flex-direction: column; gap: 4px; }
-        .stme-settings .stme-tracker-quick-row { display: grid; grid-template-columns: minmax(90px, .35fr) 1fr auto; gap: 8px; align-items: center; padding: 4px 8px; border-radius: 6px; background: rgba(0, 0, 0, .07); font-size: .9em; }
+        .stme-settings .stme-tracker-quick-row { display: grid; grid-template-columns: minmax(90px, .35fr) 1fr auto; gap: 8px; align-items: center; padding: 4px 8px; border-radius: var(--stme-radius-sm); background: rgba(0, 0, 0, .07); font-size: .9em; }
         .stme-settings .stme-tracker-quick-name { opacity: .85; overflow-wrap: anywhere; }
         .stme-settings .stme-tracker-quick-value { font-weight: 600; overflow-wrap: anywhere; }
         .stme-settings .stme-tracker-quick-owner { opacity: .55; text-align: right; white-space: nowrap; }
@@ -905,10 +905,10 @@ export const trackerModule = {
         .stme-tracker-hud-head { display: flex; align-items: center; gap: 6px; padding: 7px 8px; cursor: grab; background: linear-gradient(105deg, transparent, rgba(0, 0, 0, .14)); user-select: none; touch-action: none; }
         .stme-tracker-hud-head:active { cursor: grabbing; }
         .stme-tracker-hud-grip { opacity: .6; }
-        .stme-tracker-hud-head strong { flex: 1; font-size: .8em; letter-spacing: .04em; text-transform: uppercase; opacity: .85; }
-        .stme-tracker-hud-collapse, .stme-tracker-hud-close { border: none; background: transparent; color: inherit; opacity: .7; cursor: pointer; width: 20px; height: 20px; line-height: 1; border-radius: 5px; font-size: 1em; }
+        .stme-tracker-hud-head strong { flex: 1; font-size: .85em; letter-spacing: .03em; }
+        .stme-tracker-hud-collapse, .stme-tracker-hud-close { border: none; background: transparent; color: inherit; opacity: .7; cursor: pointer; width: 22px; height: 22px; line-height: 1; border-radius: var(--stme-radius-sm); font-size: 1em; }
         .stme-tracker-hud-collapse:hover, .stme-tracker-hud-close:hover { opacity: 1; background: rgba(255, 255, 255, .14); }
-        .stme-tracker-hud-body { padding: 9px 11px 11px; overflow-y: auto; display: flex; flex-direction: column; gap: 11px; }
+        .stme-tracker-hud-body { padding: 10px 11px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 11px; }
         .stme-tracker-hud.stme-tracker-hud-collapsed .stme-tracker-hud-body { display: none; }
         .stme-tracker-hud-empty { margin: 0; opacity: .65; font-size: .85em; }
         .stme-tracker-hud-block strong { display: block; font-size: .8em; opacity: .75; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }

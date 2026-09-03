@@ -139,9 +139,9 @@ export const lorebookModule = {
 
     css: `
         .stme-settings .stme-lorebook-help { margin: 0 0 10px; line-height: 1.4; opacity: .85; }
-        .stme-settings .stme-lorebook-status { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 7px; background: var(--SmartThemeBlurTintColor); margin-bottom: 10px; }
+        .stme-settings .stme-lorebook-status { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius); background: var(--SmartThemeBlurTintColor); margin-bottom: 10px; }
         .stme-settings .stme-lorebook-list { display: flex; flex-direction: column; gap: 5px; max-height: 320px; overflow-y: auto; }
-        .stme-settings .stme-lorebook-row { display: grid; grid-template-columns: minmax(100px, .3fr) 1fr auto; gap: 8px; align-items: center; padding: 5px 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; background: rgba(0, 0, 0, .06); font-size: .9em; }
+        .stme-settings .stme-lorebook-row { display: grid; grid-template-columns: minmax(100px, .3fr) 1fr auto; gap: 8px; align-items: center; padding: 5px 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-sm); background: rgba(0, 0, 0, .06); font-size: .9em; }
         .stme-settings .stme-lorebook-row-name { font-weight: 600; overflow-wrap: anywhere; }
         .stme-settings .stme-lorebook-row-keys { opacity: .75; overflow-wrap: anywhere; }
         .stme-settings .stme-lorebook-row-flags { opacity: .65; white-space: nowrap; text-align: right; }

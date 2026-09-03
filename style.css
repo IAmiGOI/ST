@@ -1,6 +1,19 @@
+/* Shared corner-radius scale, used across every module's own CSS too — global (not
+   scoped to .stme-settings) because floating panels (dev panel, Tracker HUD, Music
+   player) live outside it, appended straight to document.body. Three tiers, nested
+   from outside in: --stme-radius-card (top-level module/base cards) >
+   --stme-radius (a structural sub-panel inside a card body) > --stme-radius-sm (a
+   small, repeated list row). Floating windows and the outer drawer/full-screen shell
+   are a different, larger tier (12px/14px) — deliberately not part of this scale. */
+:root {
+    --stme-radius-card: 8px;
+    --stme-radius: 7px;
+    --stme-radius-sm: 6px;
+}
+
 .stme-settings .stme-intro, .stme-note-status { opacity: .75; font-size: .9em; }
 .stme-settings .stme-module-list, .stme-settings .stme-note-list, .stme-settings .stme-note-editor, .stme-settings .stme-note-settings { display: flex; flex-direction: column; gap: 8px; }
-.stme-settings .stme-module { margin: 10px 0; border: 1px solid var(--SmartThemeBorderColor); border-radius: 7px; overflow: hidden; }
+.stme-settings .stme-module { margin: 10px 0; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-card); overflow: hidden; }
 .stme-settings .stme-module-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 10px; background: var(--SmartThemeBlurTintColor); }
 .stme-settings .stme-module-header small { display: block; margin-top: 3px; opacity: .7; }
 .stme-settings .stme-toggle { white-space: nowrap; }
@@ -8,28 +21,28 @@
 /* Plain-language "what is this" hover badge (InfoDot in core/widgets.js) — next to a card title. */
 .stme-info-dot { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: 6px; border-radius: 50%; background: color-mix(in srgb, var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)) 65%, transparent); color: var(--SmartThemeBodyColor); font: italic 700 10px/1 Georgia, serif; cursor: help; user-select: none; vertical-align: middle; }
 .stme-info-dot:hover, .stme-info-dot:focus-visible { background: var(--stme-accent, var(--SmartThemeQuoteColor, #8da8ff)); outline: none; }
-.stme-info-tooltip { position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translate(-50%, 4px); width: max-content; max-width: 260px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--SmartThemeBorderColor); background: var(--SmartThemeBlurTintColor); box-shadow: 0 10px 26px rgba(0, 0, 0, .4); font: normal 400 .82em/1.4 var(--mainFontFamily, inherit); color: var(--SmartThemeBodyColor); text-align: left; white-space: normal; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .15s ease, transform .15s ease; z-index: 20; }
+.stme-info-tooltip { position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translate(-50%, 4px); width: max-content; max-width: 260px; padding: 8px 10px; border-radius: var(--stme-radius-card); border: 1px solid var(--SmartThemeBorderColor); background: var(--SmartThemeBlurTintColor); box-shadow: 0 10px 26px rgba(0, 0, 0, .4); font: normal 400 .82em/1.4 var(--mainFontFamily, inherit); color: var(--SmartThemeBodyColor); text-align: left; white-space: normal; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .15s ease, transform .15s ease; z-index: 20; }
 .stme-info-dot:hover .stme-info-tooltip, .stme-info-dot:focus-visible .stme-info-tooltip { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
 .stme-settings .stme-module-content { padding: 10px; }
 .stme-settings .stme-note-settings { padding-bottom: 8px; border-bottom: 1px solid var(--SmartThemeBorderColor); }
 .stme-settings .stme-note-settings label { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .stme-settings .stme-note-settings input { width: 90px; }
 .stme-settings .stme-note-editor { margin-top: 10px; }
-.stme-settings .stme-note { padding: 8px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; background: var(--SmartThemeBlurTintColor); white-space: pre-wrap; overflow-wrap: anywhere; }
+.stme-settings .stme-note { padding: 8px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-sm); background: var(--SmartThemeBlurTintColor); white-space: pre-wrap; overflow-wrap: anywhere; }
 .stme-settings .stme-note > div { margin-top: 4px; opacity: .9; }
-.stme-settings .stme-sidecar { margin: 10px 0; border: 1px solid var(--SmartThemeBorderColor); border-radius: 7px; overflow: hidden; }
+.stme-settings .stme-sidecar { margin: 10px 0; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius); overflow: hidden; }
 .stme-settings .stme-sidecar > header { padding: 9px 10px; background: var(--SmartThemeBlurTintColor); }
 .stme-settings .stme-sidecar header small { display: block; margin-top: 3px; opacity: .7; }
 .stme-settings .stme-sidecar-fields { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
-.stme-settings .stme-sidecar-fields > label:not(.stme-check) { display: grid; grid-template-columns: minmax(105px, .45fr) 1fr; align-items: center; gap: 10px; }
+.stme-settings .stme-sidecar-fields > label:not(.stme-check) { display: grid; grid-template-columns: minmax(110px, .4fr) 1fr; align-items: center; gap: 10px; }
 .stme-settings .stme-sidecar-fields .stme-check { display: flex; align-items: center; gap: 6px; }
 .stme-settings .stme-time-help { margin: 0; line-height: 1.4; opacity: .85; }
 .stme-settings .stme-time-presets { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .stme-settings .stme-time-presets-label { font-weight: 600; font-size: .85em; opacity: .8; }
 .stme-settings .stme-time-preset-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
-.stme-settings .stme-time-form { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 7px; background: var(--SmartThemeBlurTintColor); }
+.stme-settings .stme-time-form { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius); background: var(--SmartThemeBlurTintColor); }
 .stme-settings .stme-time-form label { display: grid; grid-template-columns: minmax(110px, .4fr) 1fr; gap: 10px; align-items: center; }
-.stme-settings .stme-sampler { border: 1px solid var(--SmartThemeBorderColor); border-radius: 7px; padding: 8px 10px; }
+.stme-settings .stme-sampler { border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius); padding: 8px 10px; }
 .stme-settings .stme-sampler summary { cursor: pointer; font-weight: 600; }
 .stme-settings .stme-sampler-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 14px; margin-top: 10px; }
 .stme-settings .stme-slider { display: flex; flex-direction: column; gap: 4px; font-size: .9em; }
@@ -45,6 +58,11 @@
 .stme-settings .stme-module-header::-webkit-details-marker { display: none; }
 .stme-settings .stme-module-header::after { content: '⌄'; margin-left: auto; opacity: .65; transition: transform .15s ease; }
 .stme-settings details:not([open]) > .stme-module-header::after { transform: rotate(-90deg); }
+/* Belt-and-suspenders: some browser/engine builds don't fully hide a closed <details>'s
+   non-summary content for layout purposes (observed while testing this UI), which can
+   silently keep a "collapsed" card's full body taking up space. This is harmless where
+   native behavior already works and fixes it where it doesn't. */
+.stme-settings details:not([open]) > :not(summary) { display: none !important; }
 .stme-settings .stme-module.stme-dragging { opacity: .45; }
 .stme-settings .stme-module[draggable="true"] > .stme-module-header::before { content: '⠿'; margin-right: 7px; opacity: .55; cursor: grab; }
 /* Polished module workspace */
@@ -63,9 +81,7 @@
 .stme-settings .stme-reasoning-grid > label:not(.stme-slider):not(.stme-check) { display: flex; flex-direction: column; gap: 4px; font-size: .9em; }
 .stme-settings .menu_button { transition: transform .15s ease, filter .15s ease; }
 .stme-settings .menu_button:hover { transform: translateY(-1px); filter: brightness(1.08); }
-.stme-settings .stme-rp-time { display: flex; align-items: center; gap: 7px; width: fit-content; margin: 14px 0 2px auto; padding: 6px 10px; border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 75%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 70%, var(--SmartThemeQuoteColor, #8da8ff)); box-shadow: 0 3px 10px rgba(0,0,0,.18); font-size: .84em; }
-.stme-settings .stme-rp-time-icon { color: var(--SmartThemeQuoteColor, #8da8ff); font-size: 1.2em; }.stme-settings .stme-rp-time-label { opacity: .68; text-transform: uppercase; letter-spacing: .06em; font-size: .8em; }.stme-settings .stme-rp-time-value { font-weight: 700; }
-.stme-settings .stme-profile-row { display:flex; gap:8px; align-items:end; padding:8px; border-radius:8px; background:rgba(0,0,0,.09); }.stme-settings .stme-profile-row label { flex:1; display:flex; flex-direction:column; gap:3px; font-size:.85em; }
+.stme-settings .stme-profile-row { display:flex; gap:8px; align-items:end; padding:8px; border-radius: var(--stme-radius); background:rgba(0,0,0,.09); }.stme-settings .stme-profile-row label { flex:1; display:flex; flex-direction:column; gap:3px; font-size:.85em; }
 /* This badge is rendered inside chat messages, outside .stme-settings. */
 #chat .stme-rp-time, .mes .stme-rp-time {
     display: block !important;
@@ -86,7 +102,7 @@
 #chat .stme-rp-time-label, .mes .stme-rp-time-label { color: var(--SmartThemeBodyColor); opacity: .7; font-size: .72em; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
 #chat .stme-rp-time-value, .mes .stme-rp-time-value { color: var(--SmartThemeBodyColor); font-size: 1.12em; font-weight: 700; letter-spacing: .025em; line-height: 1.25; }
 .stme-settings .stme-module-error { display: flex; flex-direction: column; gap: 9px; color: var(--SmartThemeQuoteColor, #e88); border-left: 3px solid currentColor; background: rgba(160, 35, 35, .12); }
-.stme-settings .stme-sidecar-manager { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }.stme-settings .stme-sidecar-manager-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:4px 2px; }.stme-settings .stme-sidecar-manager-head small { display:block; max-width:360px; opacity:.7; }.stme-settings .stme-sidecar-worker { border:1px solid var(--SmartThemeBorderColor); border-radius:9px; overflow:hidden; }.stme-settings .stme-sidecar-worker > summary { padding:9px 11px; cursor:pointer; font-weight:700; background:var(--SmartThemeBlurTintColor); }.stme-settings .stme-sidecar-worker .stme-sidecar { margin:0; border:0; border-radius:0; }
+.stme-settings .stme-sidecar-manager { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }.stme-settings .stme-sidecar-manager-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:4px 2px; }.stme-settings .stme-sidecar-manager-head small { display:block; max-width:360px; opacity:.7; }.stme-settings .stme-sidecar-worker { border:1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-card); overflow:hidden; }.stme-settings .stme-sidecar-worker > summary { padding: 9px 10px; cursor:pointer; font-weight:700; background:var(--SmartThemeBlurTintColor); }.stme-settings .stme-sidecar-worker .stme-sidecar { margin:0; border:0; border-radius:0; }
 .stme-settings .stme-sidecar-worker > summary { display:flex; align-items:center; justify-content:space-between; gap:8px; }.stme-settings .stme-worker-remove { font-size:.8em; color:#f2b4b4; }
 .stme-settings .stme-loader { display:flex; gap:8px; align-items:center; }.stme-settings .stme-loader input { flex:1; min-width:0; }
 
@@ -120,7 +136,7 @@
 /* Floating panel: appended to document.body, not part of ST Module Engine's own drawer. */
 .stme-dev-panel { position: fixed; z-index: 5000; width: 380px; max-height: 75vh; display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 70%, var(--SmartThemeBorderColor)); background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, var(--SmartThemeQuoteColor, #8da8ff)); box-shadow: 0 14px 36px rgba(0, 0, 0, .4); backdrop-filter: blur(6px); font-family: var(--mainFontFamily, inherit); color: var(--SmartThemeBodyColor); font-size: .85em; }
 .stme-dev-panel[hidden] { display: none; }
-.stme-dev-panel-head { display: flex; align-items: center; gap: 6px; padding: 8px 9px; cursor: grab; background: linear-gradient(105deg, transparent, rgba(0, 0, 0, .16)); user-select: none; touch-action: none; }
+.stme-dev-panel-head { display: flex; align-items: center; gap: 6px; padding: 7px 8px; cursor: grab; background: linear-gradient(105deg, transparent, rgba(0, 0, 0, .16)); user-select: none; touch-action: none; }
 .stme-dev-panel-head:active { cursor: grabbing; }
 .stme-dev-panel-grip { opacity: .6; }
 .stme-dev-panel-head strong { flex: 1; font-size: .85em; letter-spacing: .03em; }
@@ -130,7 +146,7 @@
 .stme-dev-empty { margin: 0; opacity: .6; font-size: .9em; }
 .stme-dev-section h4 { margin: 0 0 6px; font-size: .8em; text-transform: uppercase; letter-spacing: .06em; opacity: .7; }
 .stme-dev-table { display: flex; flex-direction: column; gap: 4px; }
-.stme-dev-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 7px; border-radius: 6px; background: rgba(0, 0, 0, .12); }
+.stme-dev-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 7px; border-radius: var(--stme-radius-sm); background: rgba(0, 0, 0, .12); }
 .stme-dev-row-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; overflow-wrap: anywhere; }
 .stme-dev-row-title code { opacity: .55; font-size: .85em; }
 .stme-dev-badge { flex-shrink: 0; padding: 2px 7px; border-radius: 999px; font-size: .8em; white-space: nowrap; }
@@ -140,9 +156,9 @@
 .stme-dev-channel-row { flex-direction: column; align-items: stretch; gap: 4px; }
 .stme-dev-channel-flags { display: flex; flex-wrap: wrap; gap: 4px; }
 .stme-dev-flag { padding: 1px 6px; border-radius: 999px; background: rgba(255, 255, 255, .1); font-size: .78em; opacity: .85; }
-.stme-dev-channel-value { display: block; padding: 4px 6px; border-radius: 5px; background: rgba(0, 0, 0, .18); overflow-wrap: anywhere; font-size: .82em; }
+.stme-dev-channel-value { display: block; padding: 4px 6px; border-radius: var(--stme-radius-sm); background: rgba(0, 0, 0, .18); overflow-wrap: anywhere; font-size: .82em; }
 .stme-dev-log { display: flex; flex-direction: column; gap: 3px; max-height: 220px; overflow-y: auto; }
-.stme-dev-log-row { display: grid; grid-template-columns: auto auto 1fr; gap: 6px; padding: 3px 5px; border-radius: 5px; font-size: .82em; }
+.stme-dev-log-row { display: grid; grid-template-columns: auto auto 1fr; gap: 6px; padding: 3px 5px; border-radius: var(--stme-radius-sm); font-size: .82em; }
 .stme-dev-log-row.stme-dev-log-error { background: color-mix(in srgb, #c0392b 22%, transparent); }
 .stme-dev-log-time { opacity: .55; }
 .stme-dev-log-module { opacity: .75; font-weight: 600; }

@@ -350,8 +350,8 @@ export const musicModule = {
     },
 
     css: `
-        .stme-settings .stme-music-help { margin: 0 0 8px; line-height: 1.4; opacity: .85; }
-        .stme-settings .stme-music-now-playing { margin: 0 0 12px; padding: 6px 10px; border-radius: 6px; background: rgba(0, 0, 0, .08); font-size: .9em; opacity: .9; }
+        .stme-settings .stme-music-help { margin: 0 0 10px; line-height: 1.4; opacity: .85; }
+        .stme-settings .stme-music-now-playing { margin: 0 0 12px; padding: 8px 10px; border-radius: var(--stme-radius); background: rgba(0, 0, 0, .08); font-size: .9em; opacity: .9; }
         .stme-settings .stme-music-section { margin-top: 14px; padding-top: 12px; border-top: 1px dashed color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent); }
         .stme-settings .stme-music-section-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
         .stme-settings .stme-music-section-head small { opacity: .65; }
@@ -359,7 +359,7 @@ export const musicModule = {
         .stme-settings .stme-music-vocab-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
         .stme-settings .stme-music-vocab-add { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
         .stme-settings .stme-music-track-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
-        .stme-settings .stme-music-track-row { padding: 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: var(--SmartThemeBlurTintColor); }
+        .stme-settings .stme-music-track-row { padding: 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-sm); background: var(--SmartThemeBlurTintColor); }
         .stme-settings .stme-music-track-main { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; }
         .stme-settings .stme-music-track-plays { opacity: .6; font-size: .82em; white-space: nowrap; }
         .stme-settings .stme-music-track-keys { margin-top: 6px; }
@@ -376,7 +376,7 @@ export const musicModule = {
         .stme-music-player-head:active { cursor: grabbing; }
         .stme-music-player-grip { opacity: .6; }
         .stme-music-player-head strong { flex: 1; font-size: .85em; letter-spacing: .03em; }
-        .stme-music-player-head .menu_button { width: 22px; height: 22px; padding: 0; line-height: 1; }
+        .stme-music-player-head .menu_button { width: 22px; height: 22px; padding: 0; line-height: 1; font-size: 1em; }
         .stme-music-player-body { padding: 10px 11px 12px; display: flex; flex-direction: column; gap: 9px; }
         .stme-music-player.stme-music-player-collapsed .stme-music-player-body { display: none; }
         .stme-music-player-track { overflow-wrap: anywhere; opacity: .9; }
