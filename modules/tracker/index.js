@@ -212,32 +212,6 @@ function createBlock() {
     };
 }
 
-function createBadge(title, label) {
-    const badge = document.createElement('section');
-    badge.className = 'stme-tracker';
-    badge.innerHTML = `
-        <div class="stme-tracker-head">
-            <span class="stme-tracker-icon">◆</span>
-            <span class="stme-tracker-label"></span>
-        </div>
-        <div class="stme-tracker-value"></div>
-    `;
-    badge.querySelector('.stme-tracker-label').textContent = title;
-    badge.querySelector('.stme-tracker-value').textContent = label;
-    return badge;
-}
-
-function renderBadges(index, snapshot) {
-    const root = document.querySelector(`.mes[mesid="${index}"] .mes_text, #chat .mes[mesid="${index}"] .mes_text`);
-    if (!root || !snapshot) return;
-    for (const [blockId, entry] of Object.entries(snapshot)) {
-        if (root.querySelector(`.stme-tracker[data-stme-tracker-block="${blockId}"]`)) continue;
-        const badge = createBadge(entry.title, entry.label);
-        badge.dataset.stmeTrackerBlock = blockId;
-        root.append(badge);
-    }
-}
-
 function resolveMessage(chat, id) {
     if (Number.isInteger(id) && chat[id]) return { message: chat[id], index: id };
     const index = chat.findIndex(item => item.mesid === id || item.send_date === id);
@@ -498,7 +472,7 @@ export const trackerModule = {
     id: 'tracker',
     title: 'Tracker',
     description: 'Independent tracker blocks, each with its own SideCar profile, prompt, and fields.',
-    about: 'Watches the story and keeps a running scoreboard of things you define — health, mood, relationship points, anything with a value that changes over time — and shows the current numbers next to each message.',
+    about: 'Watches the story and keeps a running scoreboard of things you define — health, mood, relationship points, anything with a value that changes over time — shown in an optional floating panel, never in the chat itself.',
     defaultEnabled: false,
     version: '1.0.0',
     repo: 'https://github.com/IAmiGOI/ST/tree/main/modules/tracker',
@@ -764,14 +738,20 @@ export const trackerModule = {
                     if (!parsed.data) throw new Error(`Tracker "${block.title}" got no usable data from SideCar.`);
 
                     const nextState = store.set(blockId, parsed.data, result.fields);
+                    // Tracker never renders anything into the chat transcript (see the
+                    // module-level doc comment) — this label is only a lightweight audit
+                    // snapshot on the message itself (also doubles as the "already handled
+                    // this message" guard above) and isn't shown anywhere. The real display
+                    // surface is the floating panel (renderHud below), reading live state
+                    // straight off the bus, one field per row.
                     const label = buildLabel(nextState, result.fields, block.displayTemplate);
-                    if (!label) { warn(`Block "${block.title}" — parsed data produced an empty label, skipping badge for this message.`, nextState); continue; }
+                    if (!label) { warn(`Block "${block.title}" — parsed data produced an empty label, skipping this message's snapshot.`, nextState); continue; }
 
                     resolved.message.extra ??= {};
                     resolved.message.extra[TRACKER_EXTRA_KEY] ??= {};
                     resolved.message.extra[TRACKER_EXTRA_KEY][blockId] = { title: block.title, label };
                     changed = true;
-                    log(`Block "${block.title}" — applied label "${label}" to message #${resolved.index}.`);
+                    log(`Block "${block.title}" — recorded label "${label}" for message #${resolved.index}.`);
                 } catch (error) {
                     console.error(`[ST Module Engine] Tracker "${block?.title ?? blockId}" SideCar request failed:`, error);
                     host.toast('warning', error?.message || 'Could not update tracked state.', block?.title || 'Tracker');
@@ -783,25 +763,12 @@ export const trackerModule = {
             if (changed) {
                 updateMessage(context, resolved.index, resolved.message);
                 publish();
-                setTimeout(() => {
-                    const target = document.querySelector(`.mes[mesid="${resolved.message.mesid ?? resolved.index}"] .mes_text, #chat .mes[mesid="${resolved.message.mesid ?? resolved.index}"] .mes_text`);
-                    if (!target) warn(`Badge DOM target not found for mesid ${resolved.message.mesid ?? resolved.index} — badge(s) were not appended to the chat.`);
-                    renderBadges(resolved.message.mesid ?? resolved.index, resolved.message.extra[TRACKER_EXTRA_KEY]);
-                });
             } else {
                 log('MESSAGE_RECEIVED handled — no block produced a usable label, nothing changed.');
             }
         });
 
-        const refreshBadges = () => {
-            const context = host.context();
-            let count = 0;
-            (context.chat ?? []).forEach((message, index) => {
-                if (message.extra?.[TRACKER_EXTRA_KEY]) { count++; renderBadges(message.mesid ?? index, message.extra[TRACKER_EXTRA_KEY]); }
-            });
-            log(`refreshBadges: re-applied badges for ${count} message(s) after a chat change.`);
-        };
-        const chatChangedUnsub = host.onChatChanged(() => { refreshBadges(); publish(); });
+        const chatChangedUnsub = host.onChatChanged(() => { publish(); });
         log('activate() complete.');
 
         return () => {
@@ -919,24 +886,5 @@ export const trackerModule = {
         .stme-tracker-hud-field { display: flex; justify-content: space-between; gap: 8px; font-size: .88em; }
         .stme-tracker-hud-field-name { opacity: .7; }
         .stme-tracker-hud-field-value { font-weight: 600; text-align: right; overflow-wrap: anywhere; }
-
-        #chat .stme-tracker, .mes .stme-tracker {
-            display: block !important;
-            box-sizing: border-box;
-            width: min(100%, 330px);
-            margin: 10px 0 4px auto !important;
-            padding: 10px 14px 11px !important;
-            border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8da8ff) 78%, var(--SmartThemeBorderColor)) !important;
-            border-left: 4px solid var(--SmartThemeQuoteColor, #8da8ff) !important;
-            border-radius: 10px !important;
-            background: linear-gradient(120deg, color-mix(in srgb, var(--SmartThemeBlurTintColor) 84%, var(--SmartThemeQuoteColor, #8da8ff)), var(--SmartThemeBlurTintColor)) !important;
-            box-shadow: 0 6px 18px rgba(0, 0, 0, .22) !important;
-            font-family: var(--mainFontFamily, inherit);
-            text-align: left;
-        }
-        #chat .stme-tracker-head, .mes .stme-tracker-head { display: flex !important; align-items: center; gap: 7px; margin-bottom: 4px; }
-        #chat .stme-tracker-icon, .mes .stme-tracker-icon { display: grid; place-items: center; width: 21px; height: 21px; border-radius: 50%; background: var(--SmartThemeQuoteColor, #8da8ff); color: var(--SmartThemeBodyColor); font-size: 13px; line-height: 1; }
-        #chat .stme-tracker-label, .mes .stme-tracker-label { color: var(--SmartThemeBodyColor); opacity: .7; font-size: .72em; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-        #chat .stme-tracker-value, .mes .stme-tracker-value { color: var(--SmartThemeBodyColor); font-size: 1em; font-weight: 600; line-height: 1.3; }
     `,
 };

@@ -69,8 +69,22 @@
 .stme-settings .stme-time-presets { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .stme-settings .stme-time-presets-label { font-weight: 600; font-size: .85em; opacity: .8; }
 .stme-settings .stme-time-preset-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
-.stme-settings .stme-time-form { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius); background: var(--SmartThemeBlurTintColor); }
-.stme-settings .stme-time-form label { display: grid; grid-template-columns: minmax(110px, .4fr) 1fr; gap: 10px; align-items: center; }
+/* Field editor — same structure/classes as Tracker's own (core/tracker's .stme-tracker-field-*),
+   just under the .stme-time- prefix: a list of removable rows plus an add-row, so
+   editing "which fields exist" is add/remove-a-row instead of hand-syncing three
+   separate template strings. */
+.stme-settings .stme-time-fields { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.stme-settings .stme-time-fields-label { display: flex; flex-direction: column; gap: 2px; font-weight: 600; font-size: .9em; opacity: .85; }
+.stme-settings .stme-time-fields-label small { font-weight: normal; opacity: .75; }
+.stme-settings .stme-time-field-list { display: flex; flex-direction: column; gap: 6px; }
+.stme-settings .stme-time-field-row { display: grid; grid-template-columns: minmax(70px, .3fr) 1fr auto; gap: 8px; align-items: center; padding: 5px 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-sm); background: var(--SmartThemeBlurTintColor); }
+.stme-settings .stme-time-field-name { font-weight: 700; overflow-wrap: anywhere; }
+.stme-settings .stme-time-field-add { display: grid; grid-template-columns: minmax(120px, .35fr) 1fr auto; gap: 8px; align-items: center; }
+.stme-settings .stme-time-empty { margin: 0; padding: 8px; opacity: .65; font-size: .9em; }
+.stme-settings .stme-time-display { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius); background: rgba(0, 0, 0, .06); }
+.stme-settings .stme-time-display-head { display: flex; flex-direction: column; gap: 2px; }
+.stme-settings .stme-time-display-head small { opacity: .7; }
+.stme-settings .stme-time-tokens { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .stme-settings .stme-sampler { border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius); padding: 8px 10px; }
 .stme-settings .stme-sampler summary { cursor: pointer; font-weight: 600; }
 .stme-settings .stme-sampler-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 14px; margin-top: 10px; }

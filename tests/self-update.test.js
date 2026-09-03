@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkCoreUpdate, applyCoreUpdate, deriveExtensionName } from '../core/self-update.js';
+import { checkCoreUpdate, applyCoreUpdate, deriveExtensionName, isGlobalInstall } from '../core/self-update.js';
 
 test('deriveExtensionName pulls the folder name from a real extension script URL, third-party or first-party', () => {
     assert.equal(deriveExtensionName('https://host/scripts/extensions/third-party/ST/index.js'), 'ST');
@@ -12,6 +12,13 @@ test('deriveExtensionName is null (never throws) for anything that does not matc
     assert.equal(deriveExtensionName('https://host/some/other/path.js'), null);
     assert.equal(deriveExtensionName(undefined), null);
     assert.equal(deriveExtensionName(''), null);
+});
+
+test('isGlobalInstall is true only for a script served from the shared third-party directory', () => {
+    assert.equal(isGlobalInstall('https://host/scripts/extensions/third-party/ST/index.js'), true);
+    assert.equal(isGlobalInstall('https://host/scripts/extensions/ST/index.js'), false, 'per-user install — no third-party segment');
+    assert.equal(isGlobalInstall('https://host/some/other/path.js'), false);
+    assert.equal(isGlobalInstall(undefined), false);
 });
 
 function makeContext(fetchImpl) {
@@ -41,6 +48,26 @@ test('checkCoreUpdate reports checked:true and the real isUpToDate value on a su
         const result = await checkCoreUpdate(context, 'ST');
         assert.deepEqual(result, { checked: true, upToDate: false });
         assert.deepEqual(requestBody, { extensionName: 'ST' });
+    } finally { restore(); }
+});
+
+test('checkCoreUpdate omits "global" by default, and includes global:true only when asked — a global install found the server looking in the wrong directory otherwise', async () => {
+    let requestBody;
+    const { context, restore } = makeContext(async (_url, options) => { requestBody = JSON.parse(options.body); return { ok: true, json: async () => ({ isUpToDate: true }) }; });
+    try {
+        await checkCoreUpdate(context, 'ST');
+        assert.deepEqual(requestBody, { extensionName: 'ST' }, 'no "global" key at all by default, not global:false');
+        await checkCoreUpdate(context, 'ST', { global: true });
+        assert.deepEqual(requestBody, { extensionName: 'ST', global: true });
+    } finally { restore(); }
+});
+
+test('applyCoreUpdate also threads global:true through to the update request', async () => {
+    let requestBody;
+    const { context, restore } = makeContext(async (_url, options) => { requestBody = JSON.parse(options.body); return { ok: true, json: async () => ({ isUpToDate: true }) }; });
+    try {
+        await applyCoreUpdate(context, 'ST', { global: true });
+        assert.deepEqual(requestBody, { extensionName: 'ST', global: true });
     } finally { restore(); }
 });
 

@@ -1,43 +1,127 @@
-import { h, signal, Field, TextInput, Button, Select } from '../../core/widgets.js';
+import { h, list, show, signal, computed, Field, TextInput, Button, Select, Chip } from '../../core/widgets.js';
 
 const TIME_EXTRA_KEY = 'stme_rp_time';
 const MAX_TIME_LENGTH = 120;
-const TIME_DEFAULTS = Object.freeze({ startTime: 'Year 1, Month 1, Day 1, 08:00 (Morning)', format: 'Year {year}, Month {month}, Day {day}, {time} ({period})', sidecarProfile: 'default', jsonFields: 'year,month,day,time,period', displayTemplate: 'Year {year} · Month {month} · Day {day} · {time} · {period}' });
+const MAX_FIELD_NAME_LENGTH = 40;
+const MAX_INSTRUCTION_LENGTH = 200;
+
+// One source of truth: a list of fields (name + optional formatting note), the same
+// mental model Tracker already uses. Previously this was 3 separate hand-typed
+// strings — "JSON fields" (a comma list), "Time format" (a style description for
+// SideCar), and "Display template" — that all had to independently mention the same
+// field names and stay in sync by hand. Now there's exactly one list to edit; the
+// SideCar instructions and the JSON key whitelist are both derived from it below
+// (see describeFields()/buildTimeRequest()), and only the display template remains a
+// separate, OPTIONAL thing to write (with click-to-insert tokens, same as Tracker).
+const TIME_DEFAULTS = Object.freeze({
+    startTime: 'Year 1, Month 1, Day 1, 08:00 (Morning)',
+    fields: [
+        { name: 'year', instruction: '' },
+        { name: 'month', instruction: '' },
+        { name: 'day', instruction: '' },
+        { name: 'time', instruction: '24-hour HH:MM format' },
+        { name: 'period', instruction: 'One of: Morning, Afternoon, Evening, Night' },
+    ],
+    displayTemplate: 'Year {year}, Month {month}, Day {day}, {time} ({period})',
+    sidecarProfile: 'default',
+});
 
 export const TIME_PRESETS = Object.freeze([
     {
         id: 'full-date',
         name: 'Year · Month · Day · Time · Period',
         startTime: 'Year 1, Month 1, Day 1, 08:00 (Morning)',
-        format: 'Year {year}, Month {month}, Day {day}, {time} ({period})',
-        jsonFields: 'year,month,day,time,period',
-        displayTemplate: 'Year {year} · Month {month} · Day {day} · {time} · {period}',
+        fields: [
+            { name: 'year', instruction: '' },
+            { name: 'month', instruction: '' },
+            { name: 'day', instruction: '' },
+            { name: 'time', instruction: '24-hour HH:MM format' },
+            { name: 'period', instruction: 'One of: Morning, Afternoon, Evening, Night' },
+        ],
+        displayTemplate: 'Year {year}, Month {month}, Day {day}, {time} ({period})',
     },
     {
         id: 'day-counter',
         name: 'Day counter · Time · Period',
         startTime: 'Day 0, 08:00 (Morning)',
-        format: 'Day {day}, {time} ({period})',
-        jsonFields: 'day,time,period',
-        displayTemplate: 'Day {day} · {time} · {period}',
+        fields: [
+            { name: 'day', instruction: '' },
+            { name: 'time', instruction: '24-hour HH:MM format' },
+            { name: 'period', instruction: 'One of: Morning, Afternoon, Evening, Night' },
+        ],
+        displayTemplate: 'Day {day}, {time} ({period})',
+    },
+    {
+        id: 'natural-date-12h',
+        name: 'Natural date · 12-hour clock · Period',
+        startTime: '2026 March 5 09:20 AM(Morning)',
+        fields: [
+            { name: 'year', instruction: '' },
+            { name: 'month', instruction: 'Full month name, e.g. March' },
+            { name: 'day', instruction: '' },
+            { name: 'time', instruction: '12-hour clock with AM/PM, e.g. 09:20 AM' },
+            { name: 'period', instruction: 'One of: Morning, Afternoon, Evening, Night' },
+        ],
+        displayTemplate: '{year} {month} {day} {time}({period})',
     },
 ]);
 
+/** Trims a raw field name and makes it JSON-key safe (no whitespace, bounded length) — same rule Tracker uses, same mental model for whoever's editing it. */
+export function normalizeFieldName(value) {
+    return String(value ?? '').trim().replace(/\s+/g, '_').slice(0, MAX_FIELD_NAME_LENGTH);
+}
+
+/** Normalizes a field list to unique `{ name, instruction }` entries. */
+export function sanitizeFields(fields) {
+    const seen = new Set();
+    const result = [];
+    for (const field of Array.isArray(fields) ? fields : []) {
+        const name = normalizeFieldName(typeof field === 'string' ? field : field?.name);
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        const instruction = String((typeof field === 'string' ? '' : field?.instruction) ?? '').trim().slice(0, MAX_INSTRUCTION_LENGTH);
+        result.push({ name, instruction });
+    }
+    return result;
+}
+
+/** Turns the field list into a bullet list SideCar reads as its instruction for each JSON key. */
+function describeFields(fields) {
+    return fields.map(field => field.instruction ? `- ${field.name}: ${field.instruction}` : `- ${field.name}`).join('\n');
+}
+
+/** Replaces {key} placeholders in a template with the matching value from vars. */
+function fillTemplate(template, vars) {
+    return String(template ?? '').replace(/\{([a-zA-Z0-9_-]+)\}/g, (_all, key) =>
+        Object.prototype.hasOwnProperty.call(vars, key) ? String(vars[key]) : '');
+}
+
+/** Builds the final label either from a custom display template or, if empty, an automatic "name: value" list. */
+export function buildLabel(state, fieldNames, displayTemplate) {
+    const template = String(displayTemplate ?? '').trim();
+    if (template) return fillTemplate(template, state);
+    return fieldNames.map(name => (state[name] ? `${name}: ${state[name]}` : null)).filter(Boolean).join(' · ');
+}
+
 export function normalizeTime(value) { return String(value ?? '').replace(/```[\s\S]*?```/g, '').replace(/^(?:time|rp time|время)\s*[:—-]\s*/i, '').replace(/[\r\n]+/g, ' ').replace(/["`]/g, '').replace(/^\[|\]$/g, '').trim().slice(0, MAX_TIME_LENGTH); }
+
 export function buildTimeRequest(chat, settings = TIME_DEFAULTS, currentTime = settings.startTime) {
     settings = { ...TIME_DEFAULTS, ...settings };
     currentTime ??= settings.startTime;
+    const fields = sanitizeFields(settings.fields);
     const recent = (chat ?? []).filter(item => !item.is_system).slice(-10).map(item => `${item.is_user ? 'Player' : 'Character'}: ${String(item.mes ?? '').slice(0, 900)}`).join('\n\n');
-    const fields = String(settings.jsonFields).split(',').map(item => item.trim()).filter(Boolean);
-    return { systemPrompt: `You are an RPG time tracker. The configured time format is "${settings.format}". The current known in-world time is "${currentTime}". Infer the next current in-world time. Return ONLY a JSON object with these fields: ${fields.join(', ')}. No markdown and no explanation.`, prompt: `ROLEPLAY CONTEXT:\n${recent}\n\nThe character is about to respond. Return the JSON time object only.` };
+    return {
+        systemPrompt: `You are an in-world time tracker for a roleplay chat. Track only the fields below, using each note to decide how to format it:\n${describeFields(fields)}\n\nThe current known in-world time is "${currentTime}". Infer the next current in-world time based on how much time has plausibly passed. Return ONLY a JSON object with exactly these keys: ${fields.map(field => `"${field.name}"`).join(', ')}. No markdown, no explanation.`,
+        prompt: `ROLEPLAY CONTEXT:\n${recent}\n\nThe character is about to respond. Return the updated JSON time object only.`,
+    };
 }
 export function parseTimeResponse(value, settings = TIME_DEFAULTS) {
     settings = { ...TIME_DEFAULTS, ...settings };
     const raw = String(value ?? '').replace(/```(?:json)?|```/gi, '').trim();
+    const fieldNames = sanitizeFields(settings.fields).map(field => field.name);
     try {
         const data = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
-        const fields = String(settings.jsonFields).split(',').map(item => item.trim()).filter(Boolean);
-        const label = String(settings.displayTemplate).replace(/\{([a-zA-Z0-9_-]+)\}/g, (_all, key) => String(data[key] ?? '')).replace(/\s*[·|,]\s*(?=[·|,]|$)/g, '').trim();
+        const label = buildLabel(data, fieldNames, settings.displayTemplate);
         return { label: normalizeTime(label), data, raw };
     } catch { return { label: normalizeTime(raw), data: null, raw }; }
 }
@@ -108,47 +192,119 @@ export const timeModule = {
     render(container, host) {
         console.info('[STME:time]', 'render() called.');
         const settings = host.moduleSettings(TIME_DEFAULTS);
+        settings.fields = sanitizeFields(settings.fields);
         const profiles = signal(host.sidecar.profiles());
 
         const startTime = signal(settings.startTime);
-        const format = signal(settings.format);
-        const jsonFields = signal(settings.jsonFields);
+        const fields = signal(settings.fields);
         const displayTemplate = signal(settings.displayTemplate);
         const sidecarProfile = signal(settings.sidecarProfile);
 
         const profileSelect = Select(sidecarProfile, profiles);
-        // Persist immediately on switch, so a refresh triggered elsewhere (e.g. a chat change) never reverts an unsaved pick.
         profileSelect.addEventListener('change', () => { settings.sidecarProfile = profileSelect.value; host.saveModuleSettings(); });
 
+        const startTimeInput = TextInput(startTime, { maxlength: 120 });
+        startTimeInput.addEventListener('change', () => {
+            settings.startTime = normalizeTime(startTime.peek()) || TIME_DEFAULTS.startTime;
+            startTime.set(settings.startTime);
+            host.saveModuleSettings();
+        });
+
+        const persistFields = next => {
+            fields.set(next);
+            settings.fields = next;
+            host.saveModuleSettings();
+        };
+
+        const nameInput = signal('');
+        const instructionInput = signal('');
+        const addField = () => {
+            const name = normalizeFieldName(nameInput.peek());
+            if (!name) { host.toast('warning', 'Enter a field name first.', 'RP Time'); return; }
+            if (fields.peek().some(item => item.name === name)) { host.toast('warning', `Field "${name}" already exists.`, 'RP Time'); return; }
+            persistFields([...fields.peek(), { name, instruction: instructionInput.peek().trim().slice(0, MAX_INSTRUCTION_LENGTH) }]);
+            nameInput.set(''); instructionInput.set('');
+        };
+        const nameField = TextInput(nameInput, { placeholder: 'Field name (e.g. day)', maxlength: MAX_FIELD_NAME_LENGTH });
+        const instructionField = TextInput(instructionInput, { placeholder: 'How should SideCar format it? (optional)', maxlength: MAX_INSTRUCTION_LENGTH });
+        for (const input of [nameField, instructionField]) {
+            input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); addField(); } });
+        }
+        const renderFieldRow = field => {
+            const instruction = signal(field.instruction);
+            const input = TextInput(instruction, { maxlength: MAX_INSTRUCTION_LENGTH, placeholder: 'How should SideCar format it? (optional)' });
+            input.addEventListener('change', () => {
+                field.instruction = instruction.peek().trim().slice(0, MAX_INSTRUCTION_LENGTH);
+                instruction.set(field.instruction);
+                host.saveModuleSettings();
+            });
+            return h('div', { class: 'stme-time-field-row' },
+                h('code', { class: 'stme-time-field-name' }, field.name),
+                input,
+                Button('×', () => persistFields(fields.peek().filter(item => item !== field)), { variant: 'danger' }),
+            );
+        };
+
+        const displayInput = TextInput(displayTemplate, { placeholder: 'Year {year} · {time} · {period}' });
+        displayInput.addEventListener('change', () => {
+            settings.displayTemplate = displayTemplate.peek().trim();
+            displayTemplate.set(settings.displayTemplate);
+            host.saveModuleSettings();
+        });
+        const tokens = h('div', { class: 'stme-time-tokens' },
+            show(computed(() => fields().length === 0), empty => empty ? h('span', { class: 'stme-time-empty' }, 'Add fields above to get insertable tokens.') : null),
+            list(fields, field => field.name, field => Chip(
+                [h('span', {}, field.name), h('code', {}, `{${field.name}}`)],
+                {
+                    title: `Insert {${field.name}} — this field's address in the display.`,
+                    onClick: () => {
+                        const start = displayInput.selectionStart ?? displayInput.value.length;
+                        const end = displayInput.selectionEnd ?? displayInput.value.length;
+                        const insert = `{${field.name}}`;
+                        const next = displayInput.value.slice(0, start) + insert + displayInput.value.slice(end);
+                        displayInput.value = next;
+                        settings.displayTemplate = next;
+                        displayTemplate.set(next);
+                        host.saveModuleSettings();
+                        displayInput.focus();
+                        const caret = start + insert.length;
+                        displayInput.setSelectionRange(caret, caret);
+                    },
+                },
+            )),
+        );
+
         const applyPreset = preset => {
-            startTime.set(preset.startTime); format.set(preset.format); jsonFields.set(preset.jsonFields); displayTemplate.set(preset.displayTemplate);
-            Object.assign(settings, { startTime: preset.startTime, format: preset.format, jsonFields: preset.jsonFields, displayTemplate: preset.displayTemplate });
+            const presetFields = sanitizeFields(preset.fields);
+            startTime.set(preset.startTime);
+            fields.set(presetFields);
+            displayTemplate.set(preset.displayTemplate);
+            Object.assign(settings, { startTime: preset.startTime, fields: presetFields, displayTemplate: preset.displayTemplate });
             host.saveModuleSettings();
             host.toast('success', `Preset "${preset.name}" applied.`, 'RP Time');
         };
 
         container.append(
-            h('p', { class: 'stme-time-help' }, 'The SideCar request starts with generation, then a styled time badge is appended beneath the completed response.'),
+            h('p', { class: 'stme-time-help' }, 'The SideCar request starts with generation, then the inferred in-world time is attached to the reply. Add or edit fields below — SideCar fills in whatever fields you list, formatted however you tell it to.'),
             h('div', { class: 'stme-time-presets' },
                 h('span', { class: 'stme-time-presets-label' }, 'Presets'),
                 h('div', { class: 'stme-time-preset-buttons' }, TIME_PRESETS.map(preset => Button(preset.name, () => applyPreset(preset)))),
             ),
-            h('div', { class: 'stme-time-form' },
-                Field('Starting time', TextInput(startTime, { maxlength: 120 })),
-                Field('Time format', TextInput(format, { maxlength: 120, placeholder: 'Day {day}, HH:MM' })),
-                Field('SideCar profile', profileSelect),
-                Field('JSON fields', TextInput(jsonFields, { placeholder: 'day,time,period' })),
-                Field('Display template', TextInput(displayTemplate, { placeholder: 'Day {day} · {time}' })),
-                Button('Save time settings', () => {
-                    settings.startTime = normalizeTime(startTime.peek()) || TIME_DEFAULTS.startTime;
-                    settings.format = String(format.peek()).trim() || TIME_DEFAULTS.format;
-                    settings.sidecarProfile = sidecarProfile.peek();
-                    settings.jsonFields = String(jsonFields.peek()).trim() || TIME_DEFAULTS.jsonFields;
-                    settings.displayTemplate = String(displayTemplate.peek()).trim() || TIME_DEFAULTS.displayTemplate;
-                    startTime.set(settings.startTime); format.set(settings.format); jsonFields.set(settings.jsonFields); displayTemplate.set(settings.displayTemplate);
-                    host.saveModuleSettings();
-                    host.toast('success', 'RP Time settings saved.', 'RP Time');
-                }),
+            Field('Starting time', startTimeInput, { hint: 'The very first in-world time, before SideCar has inferred anything yet.' }),
+            Field('SideCar profile', profileSelect),
+            h('div', { class: 'stme-time-fields' },
+                h('span', { class: 'stme-time-fields-label' }, 'Tracked fields', h('small', {}, 'Each field becomes one JSON key SideCar must fill in; the note tells it how to format that value.')),
+                show(computed(() => fields().length === 0), empty => empty ? h('p', { class: 'stme-time-empty' }, 'No fields yet — add one below.') : null),
+                h('div', { class: 'stme-time-field-list' }, list(fields, field => field.name, renderFieldRow)),
+                h('div', { class: 'stme-time-field-add' }, nameField, instructionField, Button('+ Add field', addField)),
+            ),
+            h('div', { class: 'stme-time-display' },
+                h('div', { class: 'stme-time-display-head' },
+                    h('strong', {}, 'Display template'),
+                    h('small', {}, 'Optional — leave empty for an automatic "name: value" list. Click a token to insert its address.'),
+                ),
+                displayInput,
+                tokens,
             ),
         );
     },

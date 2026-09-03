@@ -2,7 +2,7 @@ import { ModuleEngine } from './core/module-engine.js';
 import { createFullScreenPanel } from './core/full-screen-panel.js';
 import { createModuleBrowserPanel, renderBrowserTab } from './core/module-browser.js';
 import { LorebookService } from './core/lorebook-service.js';
-import { checkCoreUpdate, applyCoreUpdate, deriveExtensionName } from './core/self-update.js';
+import { checkCoreUpdate, applyCoreUpdate, deriveExtensionName, isGlobalInstall } from './core/self-update.js';
 import { effect } from './core/reactive.js';
 import { notebookModule } from './modules/notebook/index.js';
 import { timeModule } from './modules/time/index.js';
@@ -12,6 +12,7 @@ import { musicModule } from './modules/music/index.js';
 // See core/self-update.js — needs this exact script's own URL, which only index.js
 // (the real entry point ST imports) can supply via import.meta.url.
 const EXTENSION_NAME = deriveExtensionName(import.meta.url);
+const EXTENSION_IS_GLOBAL = isGlobalInstall(import.meta.url);
 // Guards against a reload loop: an automatic update attempt only ever runs once per
 // browser session (tab), no matter how many times init() itself runs afterward
 // (e.g. a manual page refresh). A failed attempt is communicated via the banner
@@ -88,13 +89,13 @@ function removeUpdateBanner() {
 async function attemptCoreUpdate() {
     if (!EXTENSION_NAME) return;
     const context = getContext();
-    const status = await checkCoreUpdate(context, EXTENSION_NAME);
+    const status = await checkCoreUpdate(context, EXTENSION_NAME, { global: EXTENSION_IS_GLOBAL });
     if (!status.checked) return;
     if (status.upToDate) { removeUpdateBanner(); return; }
 
     sessionStorage.setItem(UPDATE_SESSION_FLAG, '1');
     const overlay = renderBlockingOverlay();
-    const result = await applyCoreUpdate(context, EXTENSION_NAME);
+    const result = await applyCoreUpdate(context, EXTENSION_NAME, { global: EXTENSION_IS_GLOBAL });
     if (result.applied) { window.location.reload(); return; }
     overlay.remove();
     renderUpdateBanner();

@@ -848,13 +848,25 @@ reload loop), before anything else boots. It uses SillyTavern's own git-based
 extension-update endpoints — the same ones behind the "Update" button in ST's own
 Extensions manager — wrapped in `core/self-update.js`:
 
-- `checkCoreUpdate(context, extensionName)` → `POST /api/extensions/version`.
-- `applyCoreUpdate(context, extensionName)` → `POST /api/extensions/update` (a `git
-  pull`).
+- `checkCoreUpdate(context, extensionName, { global })` → `POST /api/extensions/version`.
+- `applyCoreUpdate(context, extensionName, { global })` → `POST /api/extensions/update`
+  (a `git pull`).
 
 `extensionName` isn't exposed by `getContext()` — `deriveExtensionName(import.meta.url)`
 pulls it from this exact script's own URL (the folder name in
 `.../extensions/third-party/<name>/index.js` or `.../extensions/<name>/index.js`).
+
+`global` matters and is easy to get wrong: ST distinguishes an extension installed
+for *all* users (served from the shared `.../extensions/third-party/<name>/...`
+path) from one installed for just the current user (`.../extensions/<name>/...`,
+no `third-party` segment) — `isGlobalInstall(import.meta.url)` tells them apart from
+the same URL `deriveExtensionName` already parses. Passing the wrong value means the
+server looks in the wrong directory, the request fails, and — since both functions
+below treat any failure as "nothing to do" — the whole mechanism silently never
+engages, even on a real git install. `index.js` derives both once at module load
+(`EXTENSION_NAME`, `EXTENSION_IS_GLOBAL`) and passes `{ global: EXTENSION_IS_GLOBAL }`
+to every call.
+
 Both endpoints simply don't exist for a non-git install (manually copied files) —
 every function here degrades to "checked: false" / "applied: false" instead of
 throwing, so a non-git install boots exactly as if this code weren't here at all: no
