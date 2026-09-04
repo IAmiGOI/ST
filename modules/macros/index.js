@@ -1,7 +1,7 @@
 import { execute, tokenize, parse, collectGetKeys, DEFAULT_TIME_LIMIT_MS } from './language.js';
 import {
-    h, show, signal, computed, onDispose,
-    Field, TextInput, TextArea, Toggle, Select, Button, DraggableList,
+    h, list, show, signal, computed, onDispose,
+    Field, TextInput, TextArea, Toggle, Select, Button, Chip, DraggableList,
 } from '../../core/widgets.js';
 
 const MODULE_ID = 'macros';
@@ -83,6 +83,57 @@ export function scanDependencies(programs) {
     return edges;
 }
 
+/**
+ * Inserts `text` at the caret in `textarea` and keeps `sourceSignal` (the bound
+ * signal driving it) in sync — same cursor-preserving insert Tracker's own display-
+ * template tokens and RP Time's display tokens already use, generalized here for a
+ * <textarea> instead of a one-line <input>. Kept local rather than shared/imported —
+ * this codebase's own convention (see Music's sanitizeVocabulary comment): modules
+ * don't import from one another.
+ */
+export function insertAtCursor(textarea, sourceSignal, text) {
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? textarea.value.length;
+    const next = textarea.value.slice(0, start) + text + textarea.value.slice(end);
+    textarea.value = next;
+    sourceSignal.set(next);
+    textarea.focus();
+    const caret = start + text.length;
+    textarea.setSelectionRange(caret, caret);
+}
+
+/**
+ * A real block's id is an opaque, auto-generated string (`tracker_<timestamp>_<rand>`
+ * — see modules/tracker/index.js's createBlock()), never its human title — so a
+ * hand-typed `get "tracker:field:vitals:health"` only works by coincidence, never for
+ * a block someone actually created through the UI. This reads Tracker's own published
+ * index (`host.data.read('tracker', 'blocks', ...)` — the same `{ id, title, enabled,
+ * fields }` shape its floating panel and other consumers already use) and lists every
+ * real field as a clickable chip that inserts the exact, correct key — nobody ever
+ * needs to type or guess a block id by hand.
+ */
+function renderTrackerPicker(sourceArea, ui, trackerBlocks) {
+    return h('details', { class: 'stme-macro-tracker-picker' },
+        h('summary', {}, 'Insert a tracker value ', h('small', {}, "Real keys for your own trackers — click one to insert it at the cursor.")),
+        h('div', { class: 'stme-macro-tracker-picker-body' },
+            show(computed(() => trackerBlocks().length === 0), empty => empty
+                ? h('p', { class: 'stme-macro-empty' }, 'No trackers configured yet — add one in the Tracker module first.')
+                : null),
+            list(trackerBlocks, block => block.id, block => h('div', { class: 'stme-macro-tracker-block' },
+                h('strong', {}, block.title),
+                h('div', { class: 'stme-macro-tracker-fields' },
+                    (block.fields ?? []).length
+                        ? (block.fields ?? []).map(field => Chip(field, {
+                            title: `get "tracker:field:${block.id}:${field}"`,
+                            onClick: () => insertAtCursor(sourceArea, ui.source, `get "tracker:field:${block.id}:${field}"`),
+                        }))
+                        : h('small', { class: 'stme-macro-empty' }, 'No fields on this tracker yet.'),
+                ),
+            )),
+        ),
+    );
+}
+
 export const macrosModule = {
     id: MODULE_ID,
     title: 'Macros',
@@ -156,6 +207,13 @@ export const macrosModule = {
             host.data.get('sync')?.();
         };
 
+        // Feeds renderTrackerPicker() below — read-only, another module's namespace
+        // (see MODULES.md's host.data.read/subscribe). Empty (never undefined) while
+        // Tracker is disabled or has no blocks yet; the picker shows its own "add one
+        // first" message for that case rather than erroring.
+        const trackerBlocks = signal(host.data.read('tracker', 'blocks', []));
+        onDispose(container, host.data.subscribe('tracker', 'blocks', next => trackerBlocks.set(next ?? [])));
+
         function getUi(program) {
             if (!blockUiCache.has(program.id)) {
                 blockUiCache.set(program.id, {
@@ -187,7 +245,7 @@ export const macrosModule = {
             ];
         }
 
-        function renderContent(program, ui) {
+        function renderContent(program, ui, trackerBlocks) {
             const status = signal(host.data.get(`status:${program.id}`, null));
             const wrap = h('div', { class: 'stme-macro-block' });
             const unsubStatus = host.data.subscribe(MODULE_ID, `status:${program.id}`, next => status.set(next ?? null));
@@ -211,9 +269,21 @@ export const macrosModule = {
                 Field('Macro name', TextInput(ui.macroName, { placeholder: 'my_macro' }), { hint: 'Used as {{this}} — letters, digits, underscore.' }),
                 Field('Name', TextInput(ui.name, { maxlength: MAX_NAME_LENGTH, placeholder: 'What is this for?' })),
                 Field('Kind', kindSelect),
-                show(computed(() => ui.kind()), kind => kind === 'code'
-                    ? h('div', { class: 'stme-macro-code' },
-                        TextArea(ui.source, { rows: 8, placeholder: 'set x to get "tracker:field:vitals:health"\nreturn x' }),
+                show(computed(() => ui.kind()), kind => {
+                    if (kind !== 'code') {
+                        return h('div', { class: 'stme-macro-code' },
+                            TextArea(ui.source, { rows: 3, placeholder: 'Fixed text this macro always resolves to.' }),
+                            h('div', { class: 'stme-macro-actions' }, Button('Save macro', save)),
+                        );
+                    }
+                    // Built here (not hoisted above show()'s callback) so a real DOM
+                    // element exists for the tracker picker to insert into, and so it's
+                    // rebuilt cleanly if `kind` ever flips back and forth — see show()'s
+                    // own doc comment on why reusing a node across hide/show is unsafe.
+                    const sourceArea = TextArea(ui.source, { rows: 8, placeholder: 'set x to get "tracker:field:<id>:health"\nreturn x' });
+                    return h('div', { class: 'stme-macro-code' },
+                        sourceArea,
+                        renderTrackerPicker(sourceArea, ui, trackerBlocks),
                         h('small', {}, `Time limit: ${DEFAULT_TIME_LIMIT_MS}ms per run. A macro that fails or times out shows a visible "[macro error: name]" placeholder instead of silently disappearing.`),
                         h('div', { class: 'stme-macro-actions' },
                             Button('Save macro', save),
@@ -225,11 +295,8 @@ export const macrosModule = {
                             }),
                         ),
                         show(testResult, value => value === null ? null : h('div', { class: 'stme-macro-test-result' }, h('strong', {}, 'Result: '), String(value))),
-                    )
-                    : h('div', { class: 'stme-macro-code' },
-                        TextArea(ui.source, { rows: 3, placeholder: 'Fixed text this macro always resolves to.' }),
-                        h('div', { class: 'stme-macro-actions' }, Button('Save macro', save)),
-                    )),
+                    );
+                }),
                 show(status, value => {
                     if (!value) return null;
                     return h('div', { class: value.ok ? 'stme-macro-status stme-macro-status-ok' : 'stme-macro-status stme-macro-status-error' },
@@ -244,7 +311,7 @@ export const macrosModule = {
             onToggleOpen: (program, open) => { program.collapsed = !open; host.saveModuleSettings(); },
             onReorder: next => { programs.set(next); settings.programs = next; host.saveModuleSettings(); },
             renderHeader: program => renderHeader(program, getUi(program)),
-            renderContent: program => renderContent(program, getUi(program)),
+            renderContent: program => renderContent(program, getUi(program), trackerBlocks),
             className: 'stme-macro',
         });
 
@@ -258,15 +325,16 @@ export const macrosModule = {
                         h('tr', {}, h('td', {}, h('code', {}, 'if x > 5 then … else … end')), h('td', {}, 'branches on a condition')),
                         h('tr', {}, h('td', {}, h('code', {}, 'repeat 5 times … end')), h('td', {}, 'runs the block a fixed number of times')),
                         h('tr', {}, h('td', {}, h('code', {}, 'while x < 5 … end')), h('td', {}, 'runs while a condition holds')),
-                        h('tr', {}, h('td', {}, h('code', {}, 'get "tracker:field:vitals:health"')), h('td', {}, "reads another module's bus value")),
+                        h('tr', {}, h('td', {}, h('code', {}, 'get "tracker:field:<id>:<field>"')), h('td', {}, "reads another module's bus value — a tracker's real <id> is a random string, not its title, so use the picker under the code editor to insert a working one instead of typing it by hand")),
                         h('tr', {}, h('td', {}, h('code', {}, 'save x as "count"')), h('td', {}, "remembers a value for this macro's next run")),
                         h('tr', {}, h('td', {}, h('code', {}, 'return x')), h('td', {}, 'the text this {{macro}} resolves to')),
                     ),
                 ),
                 h('p', {}, h('strong', {}, 'Example (plain text): '), h('code', {}, '"The old oak door"'), ' — that\'s the whole program.'),
                 h('p', {}, h('strong', {}, 'Example (code): ')),
-                h('pre', {}, 'set health to get "tracker:field:vitals:health"\nset shield to get "tracker:field:vitals:shield"\nreturn health + shield'),
+                h('pre', {}, 'set health to get "tracker:field:<id>:health"\nset shield to get "tracker:field:<id>:shield"\nreturn health + shield'),
                 h('p', {}, `Every macro run gets a fixed ${DEFAULT_TIME_LIMIT_MS}ms — plenty for simple math, not enough to hang the page. A macro that fails shows a visible placeholder like `, h('code', {}, '[macro error: name]'), ' instead of silently vanishing.'),
+                h('p', {}, `A tracker's real <id> is generated automatically and looks nothing like its title — never type one by hand. Switch a macro to `, h('strong', {}, 'Code'), ' and open ', h('strong', {}, '"Insert a tracker value"'), ' under the editor to click a real field in instead.'),
             ),
         );
 

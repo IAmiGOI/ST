@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ModuleEngine } from '../core/module-engine.js';
-import { macrosModule, sanitizeMacroName, scanDependencies } from '../modules/macros/index.js';
+import { macrosModule, sanitizeMacroName, scanDependencies, insertAtCursor } from '../modules/macros/index.js';
 import { trackerModule } from '../modules/tracker/index.js';
 
 /**
@@ -148,6 +148,51 @@ test('a disabled program (enabled: false) is not registered, and re-enabling it 
     program.enabled = true;
     engine.bus.get('macros', 'sync')();
     assert.equal(registeredMacros.get('toggle')(), 'x');
+});
+
+// --- insertAtCursor() — the tracker-value picker's own click-to-insert (real
+// block id + field, never a hand-typed guess like the old "vitals" example). A
+// plain fake <textarea> (value/selectionStart/selectionEnd/focus/setSelectionRange)
+// is enough — no real DOM needed to exercise the pure string-splicing + caret math.
+function makeFakeTextarea(value, selectionStart, selectionEnd = selectionStart) {
+    return {
+        value, selectionStart, selectionEnd,
+        focused: false,
+        focus() { this.focused = true; },
+        setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; },
+    };
+}
+
+test('insertAtCursor splices text in at the caret, keeps the bound signal in sync, and moves the caret to just after the inserted text', () => {
+    const textarea = makeFakeTextarea('set x to \nreturn x', 9, 9);
+    let saved = null;
+    const sourceSignal = { set: value => { saved = value; } };
+
+    insertAtCursor(textarea, sourceSignal, 'get "tracker:field:tracker_abc123:health"');
+
+    assert.equal(textarea.value, 'set x to get "tracker:field:tracker_abc123:health"\nreturn x');
+    assert.equal(saved, textarea.value);
+    assert.equal(textarea.focused, true);
+    assert.equal(textarea.selectionStart, 9 + 'get "tracker:field:tracker_abc123:health"'.length);
+    assert.equal(textarea.selectionEnd, textarea.selectionStart);
+});
+
+test('insertAtCursor replaces a real (non-collapsed) selection instead of just inserting alongside it', () => {
+    const textarea = makeFakeTextarea('return OLD', 7, 10); // "OLD" selected
+    const sourceSignal = { set: () => {} };
+
+    insertAtCursor(textarea, sourceSignal, 'get "tracker:field:b1:health"');
+
+    assert.equal(textarea.value, 'return get "tracker:field:b1:health"');
+});
+
+test('insertAtCursor falls back to appending at the end when the textarea reports no selection', () => {
+    const textarea = { value: 'return x', selectionStart: null, selectionEnd: null, focus() {}, setSelectionRange() {} };
+    const sourceSignal = { set: () => {} };
+
+    insertAtCursor(textarea, sourceSignal, '!');
+
+    assert.equal(textarea.value, 'return x!');
 });
 
 test('sanitizeMacroName strips whitespace/invalid characters the same way Tracker normalizes field names', () => {

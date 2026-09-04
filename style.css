@@ -408,3 +408,14 @@ body.stme-fullscreen-open.stme-fullscreen-hide-topbar #top-settings-holder { vis
 .stme-settings .stme-macro-guide-table td:first-child { white-space: nowrap; font-family: var(--monoFontFamily, ui-monospace, monospace); font-size: .88em; opacity: 1; }
 .stme-settings .stme-macro-guide-body pre { margin: 0; padding: 8px 10px; border-radius: var(--stme-radius-sm); background: rgba(0, 0, 0, .18); overflow-x: auto; font-family: var(--monoFontFamily, ui-monospace, monospace); font-size: .85em; white-space: pre; }
 .stme-settings .stme-macro-guide-body code { font-family: var(--monoFontFamily, ui-monospace, monospace); background: rgba(0, 0, 0, .18); border-radius: 4px; padding: 1px 4px; }
+
+/* Tracker-value picker under the code editor — click a field chip to insert its
+   real "get \"tracker:field:<id>:<name>\"" at the cursor. Reuses .stme-sampler's
+   collapsible-box look, same as the guide above. */
+.stme-settings .stme-macro-tracker-picker { margin-top: -2px; }
+.stme-settings .stme-macro-tracker-picker summary { cursor: pointer; font-size: .88em; opacity: .8; }
+.stme-settings .stme-macro-tracker-picker summary:hover { opacity: 1; }
+.stme-settings .stme-macro-tracker-picker summary small { display: block; opacity: .7; font-weight: normal; }
+.stme-settings .stme-macro-tracker-picker-body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding: 8px; border-radius: var(--stme-radius-sm); background: rgba(0, 0, 0, .12); }
+.stme-settings .stme-macro-tracker-block strong { display: block; margin-bottom: 4px; font-size: .88em; opacity: .85; }
+.stme-settings .stme-macro-tracker-fields { display: flex; flex-wrap: wrap; gap: 5px; }

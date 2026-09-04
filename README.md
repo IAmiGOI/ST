@@ -84,7 +84,7 @@ enough that most people don't want them running unasked.
 | **Tracker** | ⬜ no | Any number of stat blocks (health, mood, relationship meters, anything JSON-shaped) kept up to date automatically, each with its own model profile. |
 | **Music** | ⬜ no | A local audio player that picks tracks by scene — tag your files with keys like `combat`/`tavern`/`night`, and it classifies each new scene and plays a fitting, non-repeating track. |
 | **Macros** | ⬜ no | Define your own `{{macro}}` values — a fixed line of text, or a tiny sandboxed program that computes something from other modules' live data. |
-| **Post-Turn Processor** | ⬜ no | Runs each fresh reply through a chain of independent rewrite passes (own instruction, own model profile per pass — inspired by the [ReCast](https://github.com/closuretxt/recast-post-processing) extension) and replaces the message with the final result. |
+| **Post-Turn Processor** | ⬜ no | Runs each fresh reply through a chain of independent rewrite passes (own instruction, own model profile, optional chat context per pass) and replaces the message with the final result — with a per-message toggle to see exactly what each pass changed. |
 
 Each one is a card in the drawer: a toggle, its own settings, and (for
 Tracker and Music) an optional floating window you can drag around

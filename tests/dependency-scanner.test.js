@@ -349,10 +349,14 @@ test('scanActivationConditions finds the real event subscriptions in this repo\'
     for (const expected of ['music:GENERATION_STARTED', 'music:MESSAGE_RECEIVED', 'time:MESSAGE_RECEIVED', 'tracker:GENERATION_STARTED', 'macros:CHAT_CHANGED', 'notebook:CHAT_CHANGED', 'time:CHAT_CHANGED', 'tracker:CHAT_CHANGED']) {
         assert.ok(summary.includes(expected), `expected ${expected} among: ${summary.join(', ')}`);
     }
-    // Confirmed by grep before this feature was built: no built-in module does a
-    // raw cross-namespace host.data.read/subscribe/write today (everything goes
-    // through host.services) — a data-read/data-write edge appearing here would
-    // mean either a false positive in the regex, or a real change to a built-in
-    // module that should be reflected in this test's own expectations.
-    assert.deepEqual(edges.filter(edge => edge.kind === 'data-read' || edge.kind === 'data-write'), []);
+    // Confirmed by grep before this feature was built: no built-in module did a raw
+    // cross-namespace host.data.read/subscribe/write at the time (everything went
+    // through host.services) — a data-read/data-write edge appearing here would mean
+    // either a false positive in the regex, or a real change to a built-in module
+    // that should be reflected in this test's own expectations. Macros' own tracker
+    // picker (modules/macros/index.js's render(), reading Tracker's published
+    // `blocks` index to list real fields to insert) is exactly that real change —
+    // still no data-write anywhere, and still no OTHER raw data-read.
+    const dataEdges = edges.filter(edge => edge.kind === 'data-read' || edge.kind === 'data-write');
+    assert.deepEqual(dataEdges, [{ consumer: 'macros', owner: 'tracker', kind: 'data-read', detail: 'tracker' }]);
 });
