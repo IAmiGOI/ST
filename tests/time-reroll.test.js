@@ -143,3 +143,21 @@ test('a reroll\'s own request uses the time BEFORE this message, not its own now
     assert.match(seenPrompt, /Day 1, 08:00 \(Morning\)/);
     assert.doesNotMatch(seenPrompt, /Day 5/);
 });
+
+test('the real request sent to SideCar shows the FULL recent timeline (several past labels), not just the single latest one', async () => {
+    const chat = [
+        { is_user: false, is_system: false, mesid: 0, mes: 'First.', extra: { stme_rp_time: 'Day 1, 08:00 (Morning)' } },
+        { is_user: false, is_system: false, mesid: 1, mes: 'Second.', extra: { stme_rp_time: 'Day 1, 09:15 (Morning)' } },
+        { is_user: false, is_system: false, mesid: 2, mes: 'Third.', extra: {} },
+    ];
+    let seenPrompt = null;
+    const { host, listeners } = makeHost(chat);
+    host.sidecar.request = async ({ systemPrompt }) => { seenPrompt = systemPrompt; return JSON.stringify({ day: '1', time: '09:40', period: 'Morning' }); };
+    await timeModule.activate(host);
+
+    await roundTrip(listeners, 2, 'normal');
+
+    // Both earlier labels must appear, in chronological order, as a single arrow-joined
+    // trend — not just message #1's (the most recent before #2).
+    assert.match(seenPrompt, /"Day 1, 08:00 \(Morning\)" → "Day 1, 09:15 \(Morning\)"/);
+});

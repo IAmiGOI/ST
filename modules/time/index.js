@@ -4,6 +4,9 @@ const TIME_EXTRA_KEY = 'stme_rp_time';
 const MAX_TIME_LENGTH = 120;
 const MAX_FIELD_NAME_LENGTH = 40;
 const MAX_INSTRUCTION_LENGTH = 200;
+// How many past labeled timestamps to show SideCar as a trend — see
+// getRecentTimeline()'s own doc comment for why a single anchor point isn't enough.
+const MAX_TIMELINE_ENTRIES = 5;
 
 // One source of truth: a list of fields (name + optional formatting note), the same
 // mental model Tracker already uses. Previously this was 3 separate hand-typed
@@ -105,13 +108,42 @@ export function buildLabel(state, fieldNames, displayTemplate) {
 
 export function normalizeTime(value) { return String(value ?? '').replace(/```[\s\S]*?```/g, '').replace(/^(?:time|rp time|время)\s*[:—-]\s*/i, '').replace(/[\r\n]+/g, ' ').replace(/["`]/g, '').replace(/^\[|\]$/g, '').trim().slice(0, MAX_TIME_LENGTH); }
 
-export function buildTimeRequest(chat, settings = TIME_DEFAULTS, currentTime = settings.startTime) {
+/**
+ * `timeline`: an array of past labels, oldest first (see getRecentTimeline()) — NOT
+ * a single "current time" string any more. Two real, reported problems with the
+ * previous prompt, both about ambiguity rather than the JSON contract itself
+ * (that part parses fine):
+ *
+ *  1. One bare anchor point ("the current known time is X") gives SideCar no sense
+ *     of PACE — nothing stopped it from re-deriving an arbitrary rate of time
+ *     passage from the whole 10-message context window on every single call,
+ *     causing wildly inconsistent jumps call to call. A short timeline shows the
+ *     established pace to extrapolate from instead.
+ *  2. Nothing told SideCar that the context window is scene-setting, not a ledger
+ *     of elapsed time still waiting to be counted — every point in the timeline
+ *     already accounts for everything before the newest message, so re-reading
+ *     the whole window as "time to add up" double-counts what earlier calls
+ *     already resolved. The prompt below says this explicitly and pins the delta
+ *     to the newest exchange only, with a default toward small steps unless the
+ *     text itself signals a real skip.
+ */
+export function buildTimeRequest(chat, settings = TIME_DEFAULTS, timeline = [settings.startTime]) {
     settings = { ...TIME_DEFAULTS, ...settings };
-    currentTime ??= settings.startTime;
+    if (!Array.isArray(timeline) || !timeline.length) timeline = [settings.startTime];
     const fields = sanitizeFields(settings.fields);
     const recent = (chat ?? []).filter(item => !item.is_system).slice(-10).map(item => `${item.is_user ? 'Player' : 'Character'}: ${String(item.mes ?? '').slice(0, 900)}`).join('\n\n');
+    const timelineText = timeline.map(label => `"${label}"`).join(' → ');
     return {
-        systemPrompt: `You are an in-world time tracker for a roleplay chat. Track only the fields below, using each note to decide how to format it:\n${describeFields(fields)}\n\nThe current known in-world time is "${currentTime}". Infer the next current in-world time based on how much time has plausibly passed. Return ONLY a JSON object with exactly these keys: ${fields.map(field => `"${field.name}"`).join(', ')}. No markdown, no explanation.`,
+        systemPrompt: `You are an in-world time tracker for a roleplay chat. Track only the fields below, using each note to decide how to format it:
+${describeFields(fields)}
+
+Recent known in-world time, oldest to most recent: ${timelineText}. This shows the actual pace time has been moving at — extrapolate from it, don't invent a different pace.
+
+The roleplay text below is scene context only, not a log of elapsed time still to be counted — everything up through the second-to-last message is already reflected in the timeline above. Estimate the time step using ONLY the newest exchange (the character's latest reply, at the end of the context): how long would plausibly pass for that one exchange to happen?
+
+Default to a SMALL step (seconds to a few minutes) unless the newest exchange explicitly signals a skip (e.g. "the next morning", "hours later", "after the long walk") or a scene transition.
+
+Return ONLY a JSON object with exactly these keys: ${fields.map(field => `"${field.name}"`).join(', ')}. No markdown, no explanation.`,
         // "already responded" (past tense) — this now runs AFTER generation
         // completes (see activate()'s MESSAGE_RECEIVED handler), with the
         // character's actual new reply already the last entry in `recent`
@@ -130,38 +162,57 @@ export function parseTimeResponse(value, settings = TIME_DEFAULTS) {
     } catch { return { label: normalizeTime(raw), data: null, raw }; }
 }
 function createBadge(label) { const badge = document.createElement('section'); badge.className = 'stme-rp-time'; badge.dataset.stmeRpTime = 'true'; badge.innerHTML = `<div class="stme-rp-time-head"><span class="stme-rp-time-icon">◷</span><span class="stme-rp-time-label">Current RP time</span></div><div class="stme-rp-time-value"></div>`; badge.querySelector('.stme-rp-time-value').textContent = label; return badge; }
-function renderBadge(index, label) { const root = document.querySelector(`.mes[mesid="${index}"] .mes_text, #chat .mes[mesid="${index}"] .mes_text`); if (!root || root.querySelector('.stme-rp-time')) return; root.append(createBadge(label)); }
+/** This module's own chat-badges renderer (see core/chat-badge-service.js) — pure, derived fresh from the message's own `.extra` every time, never a cached label. */
+function renderTimeBadge(message) { const label = message?.extra?.[TIME_EXTRA_KEY]; return label ? createBadge(label) : null; }
 export function appendTime(message, time, settings = TIME_DEFAULTS) { const parsed = parseTimeResponse(time, settings); if (!parsed.label || message?.extra?.[TIME_EXTRA_KEY]) return false; message.extra ??= {}; message.extra[TIME_EXTRA_KEY] = parsed.label; message.extra.stme_rp_time_data = parsed.data; return true; }
 function resolveMessage(chat, id) { if (Number.isInteger(id) && chat[id]) return { message: chat[id], index: id }; const index = chat.findIndex(item => item.mesid === id || item.send_date === id); return index >= 0 ? { message: chat[index], index } : null; }
 function updateMessage(context, index, message) { context.updateMessageBlock?.(index, message); context.saveChatConditional?.(); context.saveChat?.(); }
 
 /**
- * The in-world time as of the most recent labeled character message, found by
- * scanning `context.chat` backward — NOT a separately maintained value. An
- * earlier version tracked a single `chatMetadata.stme_rp_time_current` scalar
- * that only ever moved forward, with nothing to roll it back when a message got
- * rerolled or deleted: a reroll's own next SideCar request would start from a
- * "current time" that was itself computed from the discarded draft, and a
- * deleted message's own time advance was never undone either. Scanning the
- * chat fresh every time needs no rollback logic for either case: the chat
- * array IS the source of truth, and it's already correct after ST removes or
- * replaces a message — there's nothing left for this module to separately
- * keep in sync.
+ * The last `count` labeled timestamps before `beforeIndex`, oldest first — found by
+ * scanning `context.chat` backward — NOT a separately maintained value. An earlier
+ * version tracked a single `chatMetadata.stme_rp_time_current` scalar that only ever
+ * moved forward, with nothing to roll it back when a message got rerolled or
+ * deleted: a reroll's own next SideCar request would start from a "current time"
+ * that was itself computed from the discarded draft, and a deleted message's own
+ * time advance was never undone either. Scanning the chat fresh every time needs no
+ * rollback logic for either case: the chat array IS the source of truth, and it's
+ * already correct after ST removes or replaces a message — there's nothing left for
+ * this module to separately keep in sync.
  *
- * `beforeIndex`, optional, bounds the scan to messages strictly before that
- * index — used when building the request for a specific message (see
- * activate() below) so a reroll's own now-cleared label (or, if not yet
- * cleared, a stale one) is never mistaken for "the current time"; the
- * `host.services` provider below omits it, since a general "what time is it
- * right now" query should see the true latest label, unbounded.
+ * Returning several past labels (not just the latest) rather than one bare "current
+ * time" string exists for buildTimeRequest() below: a single anchor point tells
+ * SideCar nothing about how FAST time has actually been moving, so nothing stopped
+ * it from re-deriving an arbitrary pace from a whole window of chat context every
+ * single call — a real, reported source of erratic jumps. A short timeline
+ * ("08:00 -> 09:15 -> 09:40") gives it an established pace to extrapolate from
+ * instead of guessing fresh each time.
+ *
+ * `beforeIndex`, optional, bounds the scan to messages strictly before that index —
+ * used when building the request for a specific message (see activate() below) so a
+ * reroll's own now-cleared label (or, if not yet cleared, a stale one) is never
+ * mistaken for part of the real timeline. Falls back to `[settings.startTime]` when
+ * nothing has been labeled yet at all.
+ */
+function getRecentTimeline(context, settings, beforeIndex = Infinity, count = MAX_TIMELINE_ENTRIES) {
+    const chat = context.chat ?? [];
+    const labels = [];
+    for (let i = Math.min(beforeIndex, chat.length) - 1; i >= 0 && labels.length < count; i--) {
+        const label = chat[i]?.extra?.[TIME_EXTRA_KEY];
+        if (label) labels.push(label);
+    }
+    return labels.length ? labels.reverse() : [settings.startTime];
+}
+
+/**
+ * The in-world time as of the most recent labeled character message — the last
+ * entry of getRecentTimeline() above, kept as its own function since most callers
+ * (the host.services provider, the {{rp_time}} macro's compute()) only ever want
+ * the single latest value, unbounded, not the whole trend.
  */
 function getCurrentTime(context, settings, beforeIndex = Infinity) {
-    const chat = context.chat ?? [];
-    for (let i = Math.min(beforeIndex, chat.length) - 1; i >= 0; i--) {
-        const label = chat[i]?.extra?.[TIME_EXTRA_KEY];
-        if (label) return label;
-    }
-    return settings.startTime;
+    const timeline = getRecentTimeline(context, settings, beforeIndex, 1);
+    return timeline[timeline.length - 1];
 }
 
 export const timeModule = {
@@ -214,6 +265,15 @@ export const timeModule = {
         const publishCurrentTime = () => host.data.set('current', getCurrentTime(host.context(), host.moduleSettings(TIME_DEFAULTS)));
         publishCurrentTime(); // full current state right away — see MODULES.md's "a producer publishes, it doesn't just notify"
 
+        // Chat-badges: an independent core service (core/chat-badge-service.js),
+        // not host.services — reached the same way LorebookService already is.
+        // Registering here means a SIBLING module (Post-Turn Processor rewriting
+        // this same message's text) can wipe this badge via its own
+        // updateMessageBlock() call and have it correctly redrawn by ITS OWN
+        // reapply() call afterward — this module never has to know that happened.
+        const chatBadges = host.data.read('chat-badges', 'api');
+        const unregisterBadge = chatBadges?.register?.('time', renderTimeBadge);
+
         // Fires once per real reply, AFTER it exists — not at GENERATION_STARTED any
         // more. An earlier version started the SideCar request in parallel with
         // generation for a faster badge, but that meant asking SideCar to infer the
@@ -249,7 +309,7 @@ export const timeModule = {
             if (!host.sidecar.isConfigured()) { warn('MESSAGE_RECEIVED ignored — SideCar is not configured. Per-worker state:', host.sidecar.diagnostics()); return; }
             running = true;
             try {
-                const built = buildTimeRequest(context.chat, settings, getCurrentTime(context, settings, resolved.index));
+                const built = buildTimeRequest(context.chat, settings, getRecentTimeline(context, settings, resolved.index));
                 log(`MESSAGE_RECEIVED — sending SideCar request (profile "${settings.sidecarProfile}").`);
                 const result = await host.sidecar.request({ ...built, profileId: settings.sidecarProfile });
                 if (!appendTime(resolved.message, result, settings)) throw new Error('SideCar returned no usable time label.');
@@ -257,26 +317,22 @@ export const timeModule = {
                 updateMessage(context, resolved.index, resolved.message);
                 publishCurrentTime();
                 setTimeout(() => {
-                    const target = document.querySelector(`.mes[mesid="${resolved.message.mesid ?? resolved.index}"] .mes_text, #chat .mes[mesid="${resolved.message.mesid ?? resolved.index}"] .mes_text`);
-                    if (!target) warn(`Badge DOM target not found for mesid ${resolved.message.mesid ?? resolved.index} — badge was not appended to the chat.`);
-                    renderBadge(resolved.message.mesid ?? resolved.index, resolved.message.extra[TIME_EXTRA_KEY]);
+                    const mesid = resolved.message.mesid ?? resolved.index;
+                    if (!document.querySelector(`.mes[mesid="${mesid}"] .mes_text, #chat .mes[mesid="${mesid}"] .mes_text`)) {
+                        warn(`Badge DOM target not found for mesid ${mesid} — badge was not appended to the chat.`);
+                    }
+                    chatBadges?.reapply?.(mesid, resolved.message);
                 });
             }
             catch (error) { console.error('[ST Module Engine] RP Time SideCar request failed:', error); host.toast('warning', error?.message || 'Could not determine RP time.', 'RP Time'); } finally { running = false; }
         });
-        const refreshBadges = () => {
-            const context = host.context();
-            let count = 0;
-            (context.chat ?? []).forEach((message, index) => { if (message.extra?.[TIME_EXTRA_KEY]) { count++; renderBadge(message.mesid ?? index, message.extra[TIME_EXTRA_KEY]); } });
-            log(`refreshBadges: re-applied ${count} existing time label(s) after a chat change.`);
-            // A different chat has its own timeline — republish so a plain bus read
-            // (Macros' get "time:current", any future subscriber) reflects the NEW
-            // chat's current time immediately, not the previous chat's last value.
-            publishCurrentTime();
-        };
-        const changed = host.onChatChanged(refreshBadges);
+        // Badge re-application on a chat switch is handled centrally by
+        // ChatBadgeService's own start() (index.js) now — this only needs to keep
+        // the "current time" bus value itself in sync, since a different chat has
+        // its own independent timeline.
+        const changed = host.onChatChanged(() => publishCurrentTime());
         log('activate() complete.');
-        return () => { received(); changed(); };
+        return () => { received(); changed(); unregisterBadge?.(); };
     },
     render(container, host) {
         console.info('[STME:time]', 'render() called.');

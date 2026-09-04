@@ -220,6 +220,11 @@ function makeHost(chat, overrides = {}) {
         moduleSettings: () => settings,
         saveModuleSettings: () => {},
         toast: () => {},
+        // Minimal fake for the chat-badges service (core/chat-badge-service.js) —
+        // real enough for activate()'s host.data.read('chat-badges', 'api') not to
+        // throw; this file's own tests are about pipeline/reroll logic, not badge
+        // rendering, which time-bus-export.test.js-style engine tests would cover.
+        data: { read: () => undefined },
     };
     return { host, listeners, context, settings };
 }
