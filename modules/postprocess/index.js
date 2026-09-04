@@ -372,45 +372,67 @@ export const postprocessModule = {
         const chatBadges = host.data.read('chat-badges', 'api');
         const unregisterBadge = chatBadges?.register?.('postprocess', renderPostprocessBadge);
 
-        const received = host.onEvent('MESSAGE_RECEIVED', async (messageId, type) => {
-            const settings = host.moduleSettings(MODULE_DEFAULTS);
-            if (settings.autoRun === false) return;
-            if (IGNORED_MESSAGE_TYPES.includes(type)) return;
-            if (!host.sidecar.isConfigured()) return;
-
-            const passes = sanitizePasses(settings.passes).filter(pass => pass.enabled !== false && pass.prompt);
-            if (!passes.length) return;
-
-            const context = host.context();
-            const resolved = resolveMessage(context.chat ?? [], messageId);
-            if (!resolved?.message || resolved.message.is_user || resolved.message.is_system) return;
-
-            // A reroll (regenerate, or swiping to a new response) reuses the SAME
-            // message object — clear a stale result so this genuinely new reply gets
-            // reprocessed instead of being skipped by the "already processed" guard below.
-            if ((type === 'regenerate' || type === 'swipe') && resolved.message.extra?.[POSTPROCESS_EXTRA_KEY]) {
-                delete resolved.message.extra[POSTPROCESS_EXTRA_KEY];
+        // Lets Tracker (or anything else) know a given MESSAGE_RECEIVED cycle's
+        // pipeline work is done — success, "nothing to do", or any other early
+        // return — so an 'after-turn' poll can wait for THIS module's rewrite to
+        // land before reading the message instead of racing it. Always fires
+        // exactly once per real MESSAGE_RECEIVED call, via the try/finally below.
+        const messageHandledListeners = new Set();
+        host.services.register('postprocess', {
+            onMessageHandled(listener) {
+                messageHandledListeners.add(listener);
+                return () => messageHandledListeners.delete(listener);
+            },
+        });
+        const notifyMessageHandled = messageId => {
+            for (const listener of [...messageHandledListeners]) {
+                try { listener(messageId); } catch (error) { console.error('[ST Module Engine] Post-Turn Processor onMessageHandled listener threw:', error); }
             }
-            if (resolved.message.extra?.[POSTPROCESS_EXTRA_KEY]) return; // already processed
+        };
 
-            const originalText = String(resolved.message.mes ?? '');
-            if (!originalText) return;
+        const received = host.onEvent('MESSAGE_RECEIVED', async (messageId, type) => {
+            try {
+                const settings = host.moduleSettings(MODULE_DEFAULTS);
+                if (settings.autoRun === false) return;
+                if (IGNORED_MESSAGE_TYPES.includes(type)) return;
+                if (!host.sidecar.isConfigured()) return;
 
-            const { text: finalText, trace } = await runPipeline(passes, originalText, (pass, built) =>
-                host.sidecar.request({ ...built, profileId: pass.profileId }), context.chat);
-            const changed = applyPipelineResult(context, resolved.index, resolved.message, { originalText, finalText, trace });
-            if (changed) {
-                const mesid = resolved.message.mesid ?? resolved.index;
-                // reapply(), not a renderer just for this module's own badge — the
-                // updateMessageBlock() call inside applyPipelineResult() just wiped
-                // the ENTIRE .mes_text DOM, so any badge RP Time (or anything else)
-                // had already drawn on this same message needs redrawing too, not
-                // just this module's own.
-                setTimeout(() => chatBadges?.reapply?.(mesid, resolved.message));
+                const passes = sanitizePasses(settings.passes).filter(pass => pass.enabled !== false && pass.prompt);
+                if (!passes.length) return;
+
+                const context = host.context();
+                const resolved = resolveMessage(context.chat ?? [], messageId);
+                if (!resolved?.message || resolved.message.is_user || resolved.message.is_system) return;
+
+                // A reroll (regenerate, or swiping to a new response) reuses the SAME
+                // message object — clear a stale result so this genuinely new reply gets
+                // reprocessed instead of being skipped by the "already processed" guard below.
+                if ((type === 'regenerate' || type === 'swipe') && resolved.message.extra?.[POSTPROCESS_EXTRA_KEY]) {
+                    delete resolved.message.extra[POSTPROCESS_EXTRA_KEY];
+                }
+                if (resolved.message.extra?.[POSTPROCESS_EXTRA_KEY]) return; // already processed
+
+                const originalText = String(resolved.message.mes ?? '');
+                if (!originalText) return;
+
+                const { text: finalText, trace } = await runPipeline(passes, originalText, (pass, built) =>
+                    host.sidecar.request({ ...built, profileId: pass.profileId }), context.chat);
+                const changed = applyPipelineResult(context, resolved.index, resolved.message, { originalText, finalText, trace });
+                if (changed) {
+                    const mesid = resolved.message.mesid ?? resolved.index;
+                    // reapply(), not a renderer just for this module's own badge — the
+                    // updateMessageBlock() call inside applyPipelineResult() just wiped
+                    // the ENTIRE .mes_text DOM, so any badge RP Time (or anything else)
+                    // had already drawn on this same message needs redrawing too, not
+                    // just this module's own.
+                    setTimeout(() => chatBadges?.reapply?.(mesid, resolved.message));
+                }
+            } finally {
+                notifyMessageHandled(messageId);
             }
         });
 
-        return () => { received(); unregisterBadge?.(); };
+        return () => { received(); unregisterBadge?.(); messageHandledListeners.clear(); };
     },
 
     render(container, host) {

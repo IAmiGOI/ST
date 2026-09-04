@@ -173,6 +173,23 @@ async function init() {
     engine.register(diceModule);
     await engine.start();
 
+    // Independent of ModuleEngine on purpose — see MODULES.md's "Independent core
+    // services" section. Talks to the rest of the system only through the shared bus
+    // (engine.bus); other code reaches it via host.data.read('lorebook', 'api').
+    // Constructed — and its Base-settings card registered — BEFORE the first
+    // engine.mount() call below: addBaseCard() only affects mount() calls that
+    // happen after it runs, so this must come first for the card to actually
+    // appear (in both the drawer's own mount() and the full-screen panel's later,
+    // lazy one).
+    const lorebook = new LorebookService(getContext, engine.bus);
+    await lorebook.start();
+    engine.addBaseCard({
+        key: 'lorebook',
+        title: 'Lorebook',
+        description: 'Browse the bound lorebook(s) and publish entries as {{macro}} values.',
+        render: (container, toast) => lorebook.render(container, toast),
+    });
+
     const target = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
     if (!target) throw new Error('SillyTavern extensions settings container was not found.');
     if (!document.getElementById('st_module_engine')) target.insertAdjacentHTML('beforeend', SETTINGS_HTML);
@@ -186,12 +203,6 @@ async function init() {
     // panel mechanism as fullScreenPanel above (core/module-browser.js).
     const browserPanel = createModuleBrowserPanel(engine);
     document.querySelector('[data-stme-browser-tab]')?.append(renderBrowserTab(browserPanel));
-
-    // Independent of ModuleEngine on purpose — see MODULES.md's "Independent core
-    // services" section. Talks to the rest of the system only through the shared bus
-    // (engine.bus); other code reaches it via host.data.read('lorebook', 'api').
-    const lorebook = new LorebookService(getContext, engine.bus);
-    await lorebook.start();
 
     // Same "independent core service, reached via host.data.read()" shape as
     // LorebookService above — see chat-badge-service.js's own doc comment for

@@ -188,6 +188,19 @@
 .stme-settings .stme-base-card.stme-sidecar-unhealthy { animation: stme-sidecar-blink 1.6s ease-in-out infinite; }
 .stme-settings .stme-sidecar-worker > summary { display:flex; align-items:center; justify-content:space-between; gap:8px; }.stme-settings .stme-worker-remove { font-size:.8em; color:#f2b4b4; }
 
+/* Lorebook card (core/lorebook-service.js) — a Base-settings card added via
+   engine.addBaseCard(), not a module. Read-only entry browser + a publish toggle
+   per entry; editing still happens in ST's own World Info panel. */
+.stme-settings .stme-lorebook-help { margin: 0 0 10px; line-height: 1.4; opacity: .85; }
+.stme-settings .stme-lorebook-books { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; padding: 8px 10px; border-radius: var(--stme-radius); background: rgba(0, 0, 0, .05); font-size: .9em; opacity: .9; }
+.stme-settings .stme-lorebook-empty { margin: 0 0 10px; padding: 8px; opacity: .65; font-size: .9em; }
+.stme-settings .stme-lorebook-list { display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }
+.stme-settings .stme-lorebook-entry { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-sm); background: var(--SmartThemeBlurTintColor); }
+.stme-settings .stme-lorebook-entry-head { display: flex; flex-direction: column; gap: 2px; }
+.stme-settings .stme-lorebook-entry-head small { opacity: .65; }
+.stme-settings .stme-lorebook-entry-keys { display: flex; flex-wrap: wrap; gap: 5px; }
+.stme-settings .stme-lorebook-entry-keys code { padding: 1px 6px; border-radius: 999px; background: rgba(0, 0, 0, .12); font-size: .82em; }
+
 /* core/widgets.js: shared building blocks used across every module's render(). */
 .stme-settings .stme-field { display: grid; grid-template-columns: minmax(110px, .4fr) 1fr; gap: 10px; align-items: center; }
 .stme-settings .stme-field.stme-field-stack { display: flex; flex-direction: column; gap: 4px; }
