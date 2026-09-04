@@ -150,7 +150,7 @@ test('createEntry: read-modify-write against the book, assigns a fresh uid, upda
     assert.ok(service.get(1));
 });
 
-test('createEntry defaults to the first bound book, and throws with a clear message when none is bound and none given', async () => {
+test('createEntry defaults to the first active book, and throws with a clear message when none is active and none given', async () => {
     const bus = new ModuleDataBus();
     const { context } = makeFakeContext({ 'Story Book': { entries: {} } });
     const service = new LorebookService(() => context, bus);
@@ -160,7 +160,7 @@ test('createEntry defaults to the first bound book, and throws with a clear mess
 
     context.chatMetadata = {};
     await service.scan();
-    await assert.rejects(() => service.createEntry({ comment: 'Y' }), /no book bound/);
+    await assert.rejects(() => service.createEntry({ comment: 'Y' }), /no lorebook active/);
 });
 
 test('updateEntry merges a patch into the existing entry and emits entryUpdated with both versions', async () => {

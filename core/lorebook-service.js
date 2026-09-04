@@ -2,22 +2,83 @@ import { EventEmitter } from './event-emitter.js';
 import { h, list, show, signal, computed, Toggle, Button } from './widgets.js';
 
 /**
- * Which lorebook(s) are bound to the current character/chat, per ST's own binding
- * model (public/scripts/world-info.js): a chat binds to at most one book by name
- * (`chatMetadata.world_info`), and a character carries its own primary book
- * (`character.data.extensions.world`). Deliberately NOT replicating ST's full
- * resolution (globally-selected books, a character's extraBooks, char-lore recursion)
- * — this is the simple, common case; the two names above cover "this story's lorebook"
- * for the vast majority of setups.
+ * Every lorebook ST would actually scan right now — the same 4 sources ST's own
+ * getSortedEntries() (public/scripts/world-info.js) unions before a generation:
+ * globally-selected (checked in the World Info panel dropdown), character-attached
+ * (primary book + `world_info.charLore`'s extraBooks — in a group chat, every
+ * ENABLED member, not just whichever character last spoke, so the active set
+ * doesn't flip mid-conversation depending on turn order), chat-attached
+ * (`chatMetadata.world_info`), and persona-attached
+ * (`powerUserSettings.persona_description_lorebook`). `globalState` — the pieces
+ * `getContext()` doesn't expose at all (see loadGlobalWorldInfoState()'s own doc
+ * comment) — defaults to empty so a caller that only has `context` still gets
+ * every source `resolveBookNames` CAN resolve from it alone.
  */
-export function resolveBookNames(context) {
+export function resolveBookNames(context, globalState = {}) {
     const names = new Set();
+
+    for (const name of globalState.selectedWorldInfo ?? []) if (name) names.add(name);
+
     const chatBook = context?.chatMetadata?.world_info;
     if (chatBook) names.add(chatBook);
-    const character = context?.characters?.[context?.characterId];
-    const charBook = character?.data?.extensions?.world;
-    if (charBook) names.add(charBook);
+
+    const addCharacterBooks = index => {
+        const character = context?.characters?.[index];
+        if (!character) return;
+        const primary = character?.data?.extensions?.world;
+        if (primary) names.add(primary);
+        const fileName = String(character.avatar ?? '').replace(/\.[^/.]+$/, '');
+        const extraBooks = globalState.charLore?.find(entry => entry.name === fileName)?.extraBooks ?? [];
+        for (const name of extraBooks) if (name) names.add(name);
+    };
+
+    if (context?.groupId) {
+        const group = context?.groups?.find(item => item.id === context.groupId);
+        const disabledMembers = new Set(group?.disabled_members ?? []);
+        for (const avatar of group?.members ?? []) {
+            if (disabledMembers.has(avatar)) continue;
+            const index = context?.characters?.findIndex(item => item.avatar === avatar);
+            if (index >= 0) addCharacterBooks(index);
+        }
+    } else if (context?.characterId !== undefined && context?.characterId !== null) {
+        addCharacterBooks(context.characterId);
+    }
+
+    const personaBook = context?.powerUserSettings?.persona_description_lorebook;
+    if (personaBook) names.add(personaBook);
+
     return [...names];
+}
+
+/**
+ * Reads `selected_world_info` (the globally-checked World Info books) and
+ * `world_info.charLore` (a character's extra books) straight from ST's own
+ * world-info.js — neither is reachable through the public `getContext()` surface
+ * at all (confirmed against SillyTavern's own public/scripts/st-context.js: it
+ * exposes `powerUserSettings`, `groups`/`groupId`, `chatMetadata`, `characters` —
+ * never the module-level WI-selection state). This is exactly what real
+ * third-party extensions with this same need already do — e.g. TunnelVision's
+ * `tool-registry.js`: `getActiveTunnelVisionBooks()`, a deep static import from
+ * the same file.
+ *
+ * A DYNAMIC import (not a static one at module scope) deliberately: a static
+ * import's resolution failure — wrong ST version/layout, or, as in this
+ * project's own test suite, no real SillyTavern tree on disk at all — would
+ * crash this whole file's module graph immediately. This way a failure only
+ * degrades THIS ONE lookup (falls back to the sources resolveBookNames() can
+ * still resolve from `context` alone), never the rest of the service.
+ *
+ * The relative path assumes the standard third-party extension layout —
+ * `public/scripts/extensions/third-party/<this-extension>/core/lorebook-service.js`,
+ * four levels below `public/scripts/world-info.js`.
+ */
+export async function loadGlobalWorldInfoState() {
+    try {
+        const worldInfo = await import('../../../../world-info.js');
+        return { selectedWorldInfo: worldInfo.selected_world_info ?? [], charLore: worldInfo.world_info?.charLore ?? [] };
+    } catch {
+        return { selectedWorldInfo: [], charLore: [] };
+    }
 }
 
 /** One World Info entry, reduced to the metadata a consumer filters/browses by — never `content` (kept out of the bus index; see get()). */
@@ -49,10 +110,10 @@ export function matchesFilter(summary, filter = {}) {
  * Merges `{ bookName: worldInfoData }` (worldInfoData = loadWorldInfo()'s `{ entries }`
  * shape, or null/undefined for a book that failed to load) into a flat summary list
  * plus a `${book}:${uid}` -> full entry map for get(). Keyed by book AND uid, not uid
- * alone: ST assigns uids per-file starting from 0, so two SEPARATE bound books (a
- * chat's own + its character's own — the exact pair resolveBookNames() can return)
- * can easily share the same numeric uid for entirely different entries. A bare-uid
- * key would let the second book's entry silently overwrite the first's here.
+ * alone: ST assigns uids per-file starting from 0, so two SEPARATE active books (a
+ * global selection + a chat's own bound book, say — any pair resolveBookNames() can
+ * return) can easily share the same numeric uid for entirely different entries. A
+ * bare-uid key would let the second book's entry silently overwrite the first's here.
  */
 export function mergeBooks(booksByName) {
     const summaries = [];
@@ -136,7 +197,8 @@ export class LorebookService {
         this.#getContext = getContext;
         this.#bus = bus;
         this.#bus.reserve(NAMESPACE, 'entries', { name: 'Lorebook entries index', schema: { type: 'array' } });
-        this.#bus.reserve(NAMESPACE, 'books', { name: 'Bound lorebook names', schema: { type: 'array' } });
+        this.#bus.reserve(NAMESPACE, 'books', { name: 'Active lorebook names', schema: { type: 'array' } });
+        this.#bus.reserve(NAMESPACE, 'publishedEntries', { name: 'Published lorebook entries index', schema: { type: 'array' } });
         this.#bus.set(NAMESPACE, 'api', {
             find: filter => this.find(filter),
             get: (uid, book) => this.get(uid, book),
@@ -186,7 +248,8 @@ export class LorebookService {
 
     async scan() {
         const context = this.#getContext();
-        const names = resolveBookNames(context);
+        const globalState = await loadGlobalWorldInfoState();
+        const names = resolveBookNames(context, globalState);
         this.#bus.set(NAMESPACE, 'books', names);
         if (!names.length) {
             this.#byUid = new Map();
@@ -220,7 +283,7 @@ export class LorebookService {
     /**
      * One entry's full record (content included) by uid, optionally disambiguated
      * by `book`. Without `book`, returns the first match across whichever books are
-     * currently bound — ambiguous only when two DIFFERENT bound books happen to
+     * currently active — ambiguous only when two DIFFERENT active books happen to
      * reuse the same numeric uid (see mergeBooks()'s own doc comment); every
      * internal caller in this file that already knows the book passes it.
      */
@@ -230,7 +293,7 @@ export class LorebookService {
         return undefined;
     }
 
-    /** Currently bound lorebook name(s). */
+    /** Currently active lorebook name(s) — see resolveBookNames()'s own doc comment for the full list of sources. */
     books() {
         return this.#bus.get(NAMESPACE, 'books', []);
     }
@@ -269,6 +332,7 @@ export class LorebookService {
         (published[book] ??= {})[uid] = true;
         this.#saveSettings();
         this.#applyPublished(book, uid);
+        this.#refreshPublishedIndex();
     }
 
     /** Turns a published entry back off — retires its macro and bus channel immediately, not just on the next scan(). */
@@ -280,6 +344,7 @@ export class LorebookService {
         }
         this.#saveSettings();
         this.#bus.unreserve(NAMESPACE, `entry:${book}:${uid}`);
+        this.#refreshPublishedIndex();
     }
 
     /** Re-applies (or, if the entry is gone, retires) every entry currently marked published — called once at the end of every scan(), so a book switch or an entry's own deletion is reflected immediately rather than leaving a stale macro pointing at nothing. */
@@ -288,6 +353,32 @@ export class LorebookService {
         for (const [book, uids] of Object.entries(published)) {
             for (const uid of Object.keys(uids)) this.#applyPublished(book, Number(uid));
         }
+        this.#refreshPublishedIndex();
+    }
+
+    /**
+     * Keeps `lorebook:publishedEntries` (a flat `{ book, uid, name, macro }[]`) in
+     * sync with whatever's really published right now — the same "producer
+     * republishes its own index" pattern `blocks`/`entries` above already use, so
+     * a consumer (Macros' own insert-picker, see modules/macros/index.js) can just
+     * `host.data.subscribe('lorebook', 'publishedEntries', ...)` instead of
+     * re-deriving this from raw settings + host.data.listChannels() itself. Skips
+     * an entry that's marked published but no longer exists — #applyPublished()
+     * already unreserve()d its own channel above; this list must not lag behind.
+     */
+    #refreshPublishedIndex() {
+        const published = this.#settings().published;
+        const index = [];
+        for (const [book, uids] of Object.entries(published)) {
+            for (const uidKey of Object.keys(uids)) {
+                const uid = Number(uidKey);
+                const entry = this.get(uid, book);
+                if (!entry) continue;
+                const displayName = String(entry.comment ?? '').trim() || `${book} #${uid}`;
+                index.push({ book, uid, name: displayName, macro: macroSlug(book, String(entry.comment ?? '').trim() || String(uid)) });
+            }
+        }
+        this.#bus.set(NAMESPACE, 'publishedEntries', index);
     }
 
     #applyPublished(book, uid) {
@@ -312,8 +403,8 @@ export class LorebookService {
     // --- Write ---
 
     /**
-     * Creates a new entry. `book` defaults to the first currently-bound book; throws if
-     * none is bound and none was given explicitly (there's nowhere to write it).
+     * Creates a new entry. `book` defaults to the first currently-active book; throws if
+     * none is active and none was given explicitly (there's nowhere to write it).
      * Read-modify-write: loads the book's current full file, adds the entry to its
      * `.entries`, saves the whole object back — nothing else in the file is touched,
      * regardless of what else it may contain beyond `entries`. Re-scans before
@@ -322,7 +413,7 @@ export class LorebookService {
      */
     async createEntry(patch = {}, { book } = {}) {
         const targetBook = book ?? this.books()[0];
-        if (!targetBook) throw new Error('createEntry: no book bound to this chat/character, and none was given explicitly.');
+        if (!targetBook) throw new Error('createEntry: no lorebook active for this chat/character, and none was given explicitly.');
         const context = this.#getContext();
         const data = (await context.loadWorldInfo?.(targetBook)) ?? { entries: {} };
         data.entries ??= {};
@@ -384,7 +475,7 @@ export class LorebookService {
         const books = signal(this.#bus.get(NAMESPACE, 'books', []));
         this.#bus.subscribe(NAMESPACE, 'books', next => books.set(next ?? []));
 
-        const booksLine = computed(() => (books().length ? `Bound: ${books().join(', ')}` : 'No lorebook is bound to this chat/character yet.'));
+        const booksLine = computed(() => (books().length ? `Active: ${books().join(', ')}` : 'No lorebook is active for this chat/character yet.'));
 
         const rescan = Button('Rescan', async () => {
             try { await this.scan(); toast('success', 'Lorebook rescanned.', 'Lorebook'); }
@@ -392,9 +483,9 @@ export class LorebookService {
         });
 
         container.append(
-            h('p', { class: 'stme-lorebook-help' }, 'Every entry in your currently bound lorebook(s), read-only — editing still happens in ST\'s own World Info panel. Toggle "Publish" to expose an entry\'s full content as a real ', h('code', {}, '{{macro}}'), ' and a bus value any module can read, the same way Tracker/RP Time already publish their own values.'),
+            h('p', { class: 'stme-lorebook-help' }, 'Every entry in your currently active lorebook(s) — global, character, chat, and persona — read-only — editing still happens in ST\'s own World Info panel. Toggle "Publish" to expose an entry\'s full content as a real ', h('code', {}, '{{macro}}'), ' and a bus value any module can read, the same way Tracker/RP Time already publish their own values.'),
             h('div', { class: 'stme-lorebook-books' }, h('span', {}, booksLine), rescan),
-            show(computed(() => entries().length === 0), empty => empty ? h('p', { class: 'stme-lorebook-empty' }, 'No entries found in the bound lorebook(s).') : null),
+            show(computed(() => entries().length === 0), empty => empty ? h('p', { class: 'stme-lorebook-empty' }, 'No entries found in the active lorebook(s).') : null),
             h('div', { class: 'stme-lorebook-list' }, list(entries, entry => `${entry.book}:${entry.uid}`, entry => this.#renderEntryCard(entry))),
         );
     }
