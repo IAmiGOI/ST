@@ -111,12 +111,28 @@ export function insertAtCursor(textarea, sourceSignal, text) {
  * fields }` shape its floating panel and other consumers already use) and lists every
  * real field as a clickable chip that inserts the exact, correct key — nobody ever
  * needs to type or guess a block id by hand.
+ *
+ * RP Time gets its own row here too — it publishes exactly one value (`time:current`,
+ * see modules/time/index.js), not a dynamic list, so `timeAvailable` (checked once at
+ * render() time via host.services.isAvailable('time') — same one-off freshness Music's
+ * own "requires Tracker" hint already uses, not live-reactive) is enough to decide
+ * whether to show it at all; no bus subscription needed for a key that's always spelled
+ * the same way.
  */
-function renderTrackerPicker(sourceArea, ui, trackerBlocks) {
+function renderInsertPicker(sourceArea, ui, trackerBlocks, timeAvailable) {
     return h('details', { class: 'stme-macro-tracker-picker' },
-        h('summary', {}, 'Insert a tracker value ', h('small', {}, "Real keys for your own trackers — click one to insert it at the cursor.")),
+        h('summary', {}, 'Insert a value ', h('small', {}, "Real keys for your other modules — click one to insert it at the cursor.")),
         h('div', { class: 'stme-macro-tracker-picker-body' },
-            show(computed(() => trackerBlocks().length === 0), empty => empty
+            timeAvailable ? h('div', { class: 'stme-macro-tracker-block' },
+                h('strong', {}, 'RP Time'),
+                h('div', { class: 'stme-macro-tracker-fields' },
+                    Chip('current time', {
+                        title: 'get "time:current"',
+                        onClick: () => insertAtCursor(sourceArea, ui.source, 'get "time:current"'),
+                    }),
+                ),
+            ) : null,
+            show(computed(() => trackerBlocks().length === 0 && !timeAvailable), empty => empty
                 ? h('p', { class: 'stme-macro-empty' }, 'No trackers configured yet — add one in the Tracker module first.')
                 : null),
             list(trackerBlocks, block => block.id, block => h('div', { class: 'stme-macro-tracker-block' },
@@ -207,12 +223,13 @@ export const macrosModule = {
             host.data.get('sync')?.();
         };
 
-        // Feeds renderTrackerPicker() below — read-only, another module's namespace
+        // Feeds renderInsertPicker() below — read-only, another module's namespace
         // (see MODULES.md's host.data.read/subscribe). Empty (never undefined) while
         // Tracker is disabled or has no blocks yet; the picker shows its own "add one
         // first" message for that case rather than erroring.
         const trackerBlocks = signal(host.data.read('tracker', 'blocks', []));
         onDispose(container, host.data.subscribe('tracker', 'blocks', next => trackerBlocks.set(next ?? [])));
+        const timeAvailable = host.services.isAvailable('time');
 
         function getUi(program) {
             if (!blockUiCache.has(program.id)) {
@@ -245,7 +262,7 @@ export const macrosModule = {
             ];
         }
 
-        function renderContent(program, ui, trackerBlocks) {
+        function renderContent(program, ui, trackerBlocks, timeAvailable) {
             const status = signal(host.data.get(`status:${program.id}`, null));
             const wrap = h('div', { class: 'stme-macro-block' });
             const unsubStatus = host.data.subscribe(MODULE_ID, `status:${program.id}`, next => status.set(next ?? null));
@@ -283,7 +300,7 @@ export const macrosModule = {
                     const sourceArea = TextArea(ui.source, { rows: 8, placeholder: 'set x to get "tracker:field:<id>:health"\nreturn x' });
                     return h('div', { class: 'stme-macro-code' },
                         sourceArea,
-                        renderTrackerPicker(sourceArea, ui, trackerBlocks),
+                        renderInsertPicker(sourceArea, ui, trackerBlocks, timeAvailable),
                         h('small', {}, `Time limit: ${DEFAULT_TIME_LIMIT_MS}ms per run. A macro that fails or times out shows a visible "[macro error: name]" placeholder instead of silently disappearing.`),
                         h('div', { class: 'stme-macro-actions' },
                             Button('Save macro', save),
@@ -311,7 +328,7 @@ export const macrosModule = {
             onToggleOpen: (program, open) => { program.collapsed = !open; host.saveModuleSettings(); },
             onReorder: next => { programs.set(next); settings.programs = next; host.saveModuleSettings(); },
             renderHeader: program => renderHeader(program, getUi(program)),
-            renderContent: program => renderContent(program, getUi(program), trackerBlocks),
+            renderContent: program => renderContent(program, getUi(program), trackerBlocks, timeAvailable),
             className: 'stme-macro',
         });
 
@@ -334,7 +351,7 @@ export const macrosModule = {
                 h('p', {}, h('strong', {}, 'Example (code): ')),
                 h('pre', {}, 'set health to get "tracker:field:<id>:health"\nset shield to get "tracker:field:<id>:shield"\nreturn health + shield'),
                 h('p', {}, `Every macro run gets a fixed ${DEFAULT_TIME_LIMIT_MS}ms — plenty for simple math, not enough to hang the page. A macro that fails shows a visible placeholder like `, h('code', {}, '[macro error: name]'), ' instead of silently vanishing.'),
-                h('p', {}, `A tracker's real <id> is generated automatically and looks nothing like its title — never type one by hand. Switch a macro to `, h('strong', {}, 'Code'), ' and open ', h('strong', {}, '"Insert a tracker value"'), ' under the editor to click a real field in instead.'),
+                h('p', {}, `A tracker's real <id> is generated automatically and looks nothing like its title — never type one by hand. Switch a macro to `, h('strong', {}, 'Code'), ' and open ', h('strong', {}, '"Insert a value"'), ' under the editor to click a real field (or RP Time\'s current time, if that module is enabled) in instead.'),
             ),
         );
 
