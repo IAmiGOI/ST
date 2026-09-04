@@ -197,16 +197,6 @@ visible without digging into logs.
 Modules never see your API key — SideCar owns the connection and only ever
 hands back the finished text.
 
-A second, separate **Embedding SideCar** card sits right next to SideCar
-Manager under Base settings — its own endpoint/model, no sampler or
-reasoning fields, because embeddings are a different contract entirely
-(text in, a fixed-length vector out, not chat completion). It isn't part
-of the generation worker pool above and doesn't round-robin — one
-connection is the norm, since every vector you produce has to stay
-comparable against every other one. As of this writing it's pure
-infrastructure (`host.embedding.request(text)`); no built-in module reads
-from it yet.
-
 ## How modules talk to each other
 
 Music picks tracks based on what Tracker thinks is happening in the scene.

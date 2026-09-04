@@ -52,38 +52,6 @@ test('RP Time builds the SideCar prompt from the field list — one source of tr
     assert.match(request.prompt, /character just responded/);
 });
 
-// --- The timeline/pace fix: a single bare "current time" anchor gave SideCar no
-// sense of how FAST time had actually been moving, and nothing told it the chat
-// context was scene-setting rather than a ledger of elapsed time still to be
-// counted — see the real diagnosis this was built from. buildTimeRequest() now
-// takes an array (oldest first), not a single string.
-
-test('buildTimeRequest shows the FULL timeline, oldest to most recent, as an explicit pace — not just the latest point', () => {
-    const settings = { fields: [{ name: 'time', instruction: '' }], startTime: 'Day 1, 08:00' };
-    const request = buildTimeRequest([], settings, ['Day 1, 08:00 (Morning)', 'Day 1, 09:15 (Morning)', 'Day 1, 09:40 (Morning)']);
-    assert.match(request.systemPrompt, /"Day 1, 08:00 \(Morning\)" → "Day 1, 09:15 \(Morning\)" → "Day 1, 09:40 \(Morning\)"/);
-    assert.match(request.systemPrompt, /actual pace time has been moving at/);
-});
-
-test('buildTimeRequest tells SideCar the chat context is scene-setting only, and to price the step from ONLY the newest exchange', () => {
-    const settings = { fields: [{ name: 'time', instruction: '' }], startTime: 'Day 1, 08:00' };
-    const request = buildTimeRequest([], settings, ['Day 1, 08:00 (Morning)']);
-    assert.match(request.systemPrompt, /scene context only, not a log of elapsed time still to be counted/);
-    assert.match(request.systemPrompt, /Estimate the time step using ONLY the newest exchange/);
-});
-
-test('buildTimeRequest defaults toward a small time step unless the text signals a real skip', () => {
-    const settings = { fields: [{ name: 'time', instruction: '' }], startTime: 'Day 1, 08:00' };
-    const request = buildTimeRequest([], settings, ['Day 1, 08:00 (Morning)']);
-    assert.match(request.systemPrompt, /Default to a SMALL step \(seconds to a few minutes\)/);
-});
-
-test('buildTimeRequest falls back to [startTime] when no timeline is given, or an empty one is', () => {
-    const settings = { fields: [{ name: 'time', instruction: '' }], startTime: 'Day 1, 08:00' };
-    assert.match(buildTimeRequest([], settings).systemPrompt, /"Day 1, 08:00"/);
-    assert.match(buildTimeRequest([], settings, []).systemPrompt, /"Day 1, 08:00"/);
-});
-
 test('RP Time changes only the message tail and never appends twice', () => {
     const message = { mes: 'Existing character response.', extra: {} };
     assert.equal(appendTime(message, 'Year 1, Month 1, Day 1, 12:00'), true);

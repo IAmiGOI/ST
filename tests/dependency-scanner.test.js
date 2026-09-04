@@ -355,14 +355,8 @@ test('scanActivationConditions finds the real event subscriptions in this repo\'
     // either a false positive in the regex, or a real change to a built-in module
     // that should be reflected in this test's own expectations. Macros' own tracker
     // picker (modules/macros/index.js's render(), reading Tracker's published
-    // `blocks` index to list real fields to insert) is one such real change; RP
-    // Time's own `host.data.read('chat-badges', 'api')` (core/chat-badge-service.js
-    // — an independent core service, reached the same way LorebookService already
-    // is) is another — still no data-write anywhere, and still no OTHER raw
-    // data-read among these five built-ins.
+    // `blocks` index to list real fields to insert) is exactly that real change —
+    // still no data-write anywhere, and still no OTHER raw data-read.
     const dataEdges = edges.filter(edge => edge.kind === 'data-read' || edge.kind === 'data-write');
-    assert.deepEqual(dataEdges.sort((a, b) => a.consumer.localeCompare(b.consumer)), [
-        { consumer: 'macros', owner: 'tracker', kind: 'data-read', detail: 'tracker' },
-        { consumer: 'time', owner: 'chat-badges', kind: 'data-read', detail: 'chat-badges' },
-    ]);
+    assert.deepEqual(dataEdges, [{ consumer: 'macros', owner: 'tracker', kind: 'data-read', detail: 'tracker' }]);
 });

@@ -2,7 +2,6 @@ import { ModuleEngine } from './core/module-engine.js';
 import { createFullScreenPanel } from './core/full-screen-panel.js';
 import { createModuleBrowserPanel, renderBrowserTab } from './core/module-browser.js';
 import { LorebookService } from './core/lorebook-service.js';
-import { ChatBadgeService } from './core/chat-badge-service.js';
 import { checkCoreUpdate, applyCoreUpdate, deriveExtensionName, isGlobalInstall } from './core/self-update.js';
 import { diagnoseCoreUpdate } from './core/update-diagnostics.js';
 import { effect } from './core/reactive.js';
@@ -193,16 +192,8 @@ async function init() {
     const lorebook = new LorebookService(getContext, engine.bus);
     await lorebook.start();
 
-    // Same "independent core service, reached via host.data.read()" shape as
-    // LorebookService above — see chat-badge-service.js's own doc comment for
-    // the actual bug this exists to fix (a module's updateMessageBlock() call
-    // silently wiping out a DIFFERENT module's already-appended chat badge).
-    const chatBadges = new ChatBadgeService(getContext, engine.bus);
-    chatBadges.start(); // subscribes to CHAT_CHANGED itself — no per-module refresh handler needed
-
     window.STModuleEngine = engine;
     window.STModuleEngineLorebook = lorebook;
-    window.STModuleEngineChatBadges = chatBadges;
     window.STModuleEngineBrowser = browserPanel;
     console.info('[ST Module Engine] Started with Notebook, RP Time, Tracker, Music, Macros, Post-Turn Processor and Dice modules, plus the independent Lorebook service.');
 }

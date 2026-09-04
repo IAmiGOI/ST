@@ -1,6 +1,5 @@
 import { SidecarService } from './sidecar-service.js';
 import { MainLlmService } from './main-llm-service.js';
-import { EmbeddingService } from './embedding-service.js';
 import { h, list, signal, Button } from './widgets.js';
 
 /** Schedules module requests over several SideCar configurations for lowest queue wait. */
@@ -32,23 +31,13 @@ export class SidecarManager {
     // request() below treats "no route planner" the same as "route planner
     // said proceed."
     #getRoutePlanner;
-    // A separate, single shared connection for a fundamentally different
-    // contract (text -> vector, no sampler/reasoning) — deliberately NOT one of
-    // the round-robin generation #services above. See embedding-service.js's own
-    // doc comment for why mixing it into that pool would make no sense. Reuses
-    // this same settingsRoot/save closure (stored as `embedding` alongside
-    // `sidecars` in the same settings object) rather than needing its own.
-    #embedding;
     constructor(settingsRoot, save, getContext, getRoutePlanner = () => null) {
         this.#root = settingsRoot;
         this.#save = save;
         this.#getContext = getContext;
         this.#getRoutePlanner = getRoutePlanner;
         this.#mainLlm = new MainLlmService(getContext);
-        this.#embedding = new EmbeddingService(settingsRoot, save);
     }
-    /** The separate embedding connection — see #embedding's own doc comment. Exposed for module-engine.js's mount() (its own settings card) and #hostFor() (host.embedding). */
-    get embedding() { return this.#embedding; }
     configs() {
         const root = this.#root();
         if (!Array.isArray(root.sidecars)) {

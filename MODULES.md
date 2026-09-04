@@ -1183,50 +1183,6 @@ living outside it are both deliberate, not inconsistent: SideCar is intrinsic to
 the engine already does for every module (give it a model); Lorebook's future shape is
 explicitly meant to grow past what `ModuleEngine` is about.
 
-**`core/chat-badge-service.js`'s `ChatBadgeService`** — the same independent-service
-shape, for a much narrower, purely-DOM problem: a "badge" (RP Time's clock, Post-Turn
-Processor's change diff) is a small decoration a module appends under a message,
-separate from `message.mes`/`.extra` entirely — but `context.updateMessageBlock()`
-re-renders that message's DOM straight from its stored `.mes`/`.extra`, and anything a
-DIFFERENT module had separately appended into that same `.mes_text` element is wiped
-out by that re-render, since it was never part of what `updateMessageBlock()`
-reproduces. Confirmed as a real, reported bug: Post-Turn Processor rewriting a message
-RP Time had already time-stamped silently erased the time badge from the visible chat,
-even though `message.extra.stme_rp_time` was still correctly set the whole time —
-each badge-owning module only ever re-applied its OWN badge reactively, with no way to
-know a sibling module's later `updateMessageBlock()` call had just erased it.
-
-```js
-const chatBadges = host.data.read('chat-badges', 'api');
-const unregister = chatBadges.register('time', (message, mesid) => {
-  const label = message?.extra?.stme_rp_time;
-  return label ? createBadge(label) : null;           // pure — re-derived every call, never a cached label
-});
-// ...after this module's own updateMessageBlock() call:
-chatBadges.reapply(mesid, message);                    // re-renders EVERY registered owner's badge for this message, not just this module's
-```
-
-`register(ownerId, render)` takes a pure `(message, mesid) => Node | null`, called on
-every `reapply()`/`refreshAll()` for every message (not just ones this owner actually
-stamped) — the "re-derive, don't separately track" discipline RP Time's own
-`getCurrentTime()` already uses for the identical class of staleness bug, just applied
-to DOM instead of application state. `reapply(mesid, message)` re-renders every
-registered owner's badge for one message (each tagged via `data-stme-badge-owner` so a
-re-render only ever replaces that owner's own prior node, never touching anyone else's
-DOM); `refreshAll()` does the same across the whole current chat, and the service
-subscribes to `CHAT_CHANGED` itself (`start()`, called once from `index.js`) so no
-participating module needs its own near-identical "re-walk the chat on chat-changed"
-handler just for this. `register()`'s own returned unregister function also sweeps that
-owner's already-rendered badges out of the whole chat immediately — the same "actively
-clear on disable, don't just stop future updates" discipline `ModuleEngine.disable()`'s
-own belt-and-suspenders sweeps already apply to bus channels/tools/services.
-
-Both RP Time and Post-Turn Processor register with it and call `reapply()` right after
-their own `updateMessageBlock()` call — which is what actually fixes the bug: whichever
-module's content rewrite happens last redraws *every* registered badge, not just its
-own, so no sibling's decoration is ever silently lost to someone else's rewrite,
-regardless of which module ran first.
-
 ## Versioning and auto-updates
 
 Three separate mechanisms, covering three separate things that can go stale: the

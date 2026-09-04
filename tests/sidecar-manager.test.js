@@ -19,27 +19,6 @@ test('SideCar Manager adds independent workers', () => {
     assert.notEqual(manager.configs()[0], manager.configs()[1]);
 });
 
-// --- Embedding SideCar: a separate, single connection, not part of the
-// generation worker pool at all — see embedding-service.js's own doc comment.
-
-test('SideCar Manager exposes a separate embedding connection, sharing the same settings root but its own key', () => {
-    const root = { sidecars: [{ id: 'primary', name: 'Primary', enabled: false }] };
-    const manager = new SidecarManager(() => root, () => {});
-    assert.ok(manager.embedding, 'manager.embedding must exist');
-    manager.embedding.update({ enabled: true, endpoint: 'https://example.test/v1', model: 'text-embedding-3-small' });
-    assert.equal(manager.embedding.isConfigured(), true);
-    // Configuring the embedding connection must never touch the generation pool.
-    assert.equal(manager.configs().length, 1);
-    assert.equal(manager.configs()[0].id, 'primary');
-    assert.equal(root.embedding.endpoint, 'https://example.test/v1');
-});
-
-test('forModule() does not expose embedding directly — it is reached via manager.embedding.forModule(), a separate surface', () => {
-    const manager = new SidecarManager(() => ({ sidecars: [{ id: 'primary', name: 'Primary', enabled: false }] }), () => {});
-    const forModule = manager.forModule('some-module');
-    assert.equal('embedding' in forModule, false);
-});
-
 // --- Main-LLM fallback: priority-0, never part of the normal worker pool, only
 // reachable via the explicit requestFallback()/forModule().requestFallback() path.
 

@@ -245,10 +245,10 @@ function createPostprocessBadge(entry) {
     return details;
 }
 
-/** This module's own chat-badges renderer (see core/chat-badge-service.js) — pure, derived fresh from the message's own `.extra` every time, never a cached trace. */
-function renderPostprocessBadge(message) {
-    const entry = message?.extra?.[POSTPROCESS_EXTRA_KEY];
-    return entry ? createPostprocessBadge(entry) : null;
+function renderBadge(index, entry) {
+    const root = document.querySelector(`.mes[mesid="${index}"] .mes_text, #chat .mes[mesid="${index}"] .mes_text`);
+    if (!root || root.querySelector('.stme-postprocess-badge')) return;
+    root.append(createPostprocessBadge(entry));
 }
 
 function getPassUi(cache, pass) {
@@ -362,16 +362,6 @@ export const postprocessModule = {
     minEngineVersion: '0.1.0',
 
     activate(host) {
-        // Independent core service, not host.services — same shape RP Time already
-        // uses. Registering here means THIS module's applyPipelineResult() below,
-        // which calls context.updateMessageBlock() and therefore wipes out any
-        // badge a SIBLING module (RP Time) had already drawn on this same message,
-        // can restore it correctly via reapply() — without needing to know RP Time
-        // exists at all. See core/chat-badge-service.js's own doc comment; this is
-        // the actual bug the service was built to fix.
-        const chatBadges = host.data.read('chat-badges', 'api');
-        const unregisterBadge = chatBadges?.register?.('postprocess', renderPostprocessBadge);
-
         const received = host.onEvent('MESSAGE_RECEIVED', async (messageId, type) => {
             const settings = host.moduleSettings(MODULE_DEFAULTS);
             if (settings.autoRun === false) return;
@@ -400,36 +390,26 @@ export const postprocessModule = {
                 host.sidecar.request({ ...built, profileId: pass.profileId }), context.chat);
             const changed = applyPipelineResult(context, resolved.index, resolved.message, { originalText, finalText, trace });
             if (changed) {
-                const mesid = resolved.message.mesid ?? resolved.index;
-                // reapply(), not a renderer just for this module's own badge — the
-                // updateMessageBlock() call inside applyPipelineResult() just wiped
-                // the ENTIRE .mes_text DOM, so any badge RP Time (or anything else)
-                // had already drawn on this same message needs redrawing too, not
-                // just this module's own.
-                setTimeout(() => chatBadges?.reapply?.(mesid, resolved.message));
+                setTimeout(() => renderBadge(resolved.message.mesid ?? resolved.index, resolved.message.extra[POSTPROCESS_EXTRA_KEY]));
             }
         });
 
-        return () => { received(); unregisterBadge?.(); };
+        const refreshBadges = () => {
+            const context = host.context();
+            (context.chat ?? []).forEach((message, index) => {
+                if (message.extra?.[POSTPROCESS_EXTRA_KEY]) renderBadge(message.mesid ?? index, message.extra[POSTPROCESS_EXTRA_KEY]);
+            });
+        };
+        const changed = host.onChatChanged(refreshBadges);
+
+        return () => { received(); changed(); };
     },
 
     render(container, host) {
         const settings = host.moduleSettings(MODULE_DEFAULTS);
-        // Sanitized IN PLACE, then the signal is built from that SAME array/objects
-        // — not signal(sanitizePasses(settings.passes)), which would hand every
-        // rendered pass row a freshly-copied object no longer identical to what
-        // `settings.passes` points at. Every per-pass field handler below mutates
-        // `pass` directly and just calls host.saveModuleSettings() (no
-        // persistPasses() round trip) — with a detached copy, that mutates an
-        // object nobody actually persists, so an edited instruction (or name,
-        // profile, context toggle, depth — every per-pass field) silently reverts
-        // on reload until SOME add/remove/reorder happens to resync the two
-        // arrays via persistPasses() below. Same pattern RP Time/Tracker's own
-        // render() already use for their own field/block lists.
-        settings.passes = sanitizePasses(settings.passes);
         const profiles = signal(host.sidecar.profiles());
         const autoRun = signal(settings.autoRun !== false);
-        const passes = signal(settings.passes);
+        const passes = signal(sanitizePasses(settings.passes));
         const passUiCache = new Map();
 
         const persistPasses = next => {

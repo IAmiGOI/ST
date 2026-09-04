@@ -166,20 +166,3 @@ test('a module can unregister its own service explicitly, but not one it does no
     ownerHost.services.unregister('svc');
     assert.equal(ownerHost.services.get('svc'), undefined, 'the owner can unregister its own service');
 });
-
-// --- host.embedding: a separate connection from host.sidecar (see
-// core/embedding-service.js) — infrastructure only, not consumed by any
-// built-in module yet, but the host surface must actually reach the real,
-// shared EmbeddingService instance.
-
-test('host.embedding is a real, shared connection — separate from host.sidecar, configuring one never touches the other', async () => {
-    const engine = makeEngine();
-    let host;
-    engine.register(stubModule('consumer', { activate(h) { host = h; return () => {}; } }));
-    await engine.start();
-
-    assert.equal(host.embedding.isConfigured(), false);
-    engine.sidecar.embedding.update({ enabled: true, endpoint: 'https://example.test/v1', model: 'text-embedding-3-small' });
-    assert.equal(host.embedding.isConfigured(), true, 'host.embedding reads the same underlying EmbeddingService the engine owns');
-    assert.equal(host.sidecar.isConfigured(), false, 'configuring the embedding connection must not configure the generation SideCar');
-});

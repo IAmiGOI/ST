@@ -454,21 +454,6 @@ export class ModuleEngine {
         effectOn(sidecarCard, () => { sidecarCard.classList.toggle('stme-sidecar-unhealthy', this.sidecar.healthy() === false); });
         baseList.append(sidecarCard);
 
-        // A separate card, not a section inside SideCar Manager above — an embedding
-        // connection is a genuinely different thing (text -> vector, no sampler/
-        // reasoning, no worker pool), not another generation worker. See
-        // embedding-service.js's own doc comment. No health-blink wiring here (unlike
-        // the generation card) — this stays deliberately minimal infrastructure until
-        // a real consumer exists.
-        const embeddingCard = h('details', { class: 'stme-base-card', open: !this.layout().collapsed.embedding });
-        embeddingCard.addEventListener('toggle', () => { this.layout().collapsed.embedding = !embeddingCard.open; this.saveSettings(); });
-        const embeddingHeader = h('summary', { class: 'stme-module-header' },
-            h('div', {}, h('strong', {}, 'Embedding SideCar', InfoDot('A separate connection for text embeddings (semantic vectors), not chat generation — its own endpoint/model, no sampler settings. Infrastructure for a future module; nothing built in reads from it yet.')), h('small', {}, 'A separate connection for text embeddings — not part of the generation worker pool above.')));
-        const embeddingContent = h('div', {});
-        embeddingCard.append(embeddingHeader, embeddingContent);
-        this.sidecar.embedding.render(embeddingContent, (level, message, title) => this.#toast(level, message, title));
-        baseList.append(embeddingCard);
-
         // Not a module, not nested in either list above — a floating window
         // toggled from one button at the very bottom of the whole drawer, so it
         // reads as its own detached tool rather than another card in this UI.
@@ -702,10 +687,6 @@ export class ModuleEngine {
             },
             toast: (level, message, title = module.title) => this.#toast(level, message, title),
             sidecar: this.sidecar.forModule(module.id),
-            // Separate from `sidecar` on purpose — see embedding-service.js's own doc
-            // comment. Infrastructure only as of this writing: no built-in module
-            // reads from it yet.
-            embedding: this.sidecar.embedding.forModule(module.id),
             moduleSettings: (defaults = {}) => this.moduleSettings(module.id, defaults),
             saveModuleSettings: () => this.saveSettings(),
             data: Object.freeze({
