@@ -346,11 +346,7 @@ test('scanActivationConditions finds the real event subscriptions in this repo\'
     // entirely from MESSAGE_RECEIVED (post-generation, so its SideCar request can
     // see the character's actual new reply) — see MODULES.md/the memory note on
     // why the earlier GENERATION_STARTED-triggered version was changed.
-    // 'tracker:GENERATION_STARTED' is likewise gone: Tracker's old single
-    // GENERATION_STARTED-parallel-dispatch flow was replaced by the 4-mode poll
-    // system (MESSAGE_SENT for 'user-message' mode, MESSAGE_RECEIVED for
-    // 'after-turn'/'every-n-turns', plus in-process timers for 'every-n-time').
-    for (const expected of ['music:GENERATION_STARTED', 'music:MESSAGE_RECEIVED', 'time:MESSAGE_RECEIVED', 'tracker:MESSAGE_SENT', 'tracker:MESSAGE_RECEIVED', 'macros:CHAT_CHANGED', 'notebook:CHAT_CHANGED', 'time:CHAT_CHANGED', 'tracker:CHAT_CHANGED']) {
+    for (const expected of ['music:GENERATION_STARTED', 'music:MESSAGE_RECEIVED', 'time:MESSAGE_RECEIVED', 'tracker:GENERATION_STARTED', 'macros:CHAT_CHANGED', 'notebook:CHAT_CHANGED', 'time:CHAT_CHANGED', 'tracker:CHAT_CHANGED']) {
         assert.ok(summary.includes(expected), `expected ${expected} among: ${summary.join(', ')}`);
     }
     // Confirmed by grep before this feature was built: no built-in module did a raw

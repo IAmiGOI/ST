@@ -1,7 +1,7 @@
 import { createTrackerStore } from './store.js';
 import {
     h, list, show, signal, computed, onDispose, effectOn,
-    Field, TextInput, TextArea, Select, SliderField, Toggle, Button, Chip, DraggableList,
+    Field, TextInput, TextArea, Select, Toggle, Button, Chip, DraggableList,
     makeDraggable, applyFloatingPosition,
 } from '../../core/widgets.js';
 
@@ -26,60 +26,6 @@ const DEFAULT_SYSTEM_PROMPT =
     'Read the recent context and infer updated values only for fields that plausibly changed; keep the others as given. ' +
     'Return ONLY a JSON object with exactly these keys: {fieldsJson}. No extra keys, no markdown, no explanation.';
 const DEFAULT_PROMPT = 'RECENT CONTEXT:\n{context}\n\nThe character is about to respond. Return the updated JSON object only.';
-
-// --- Poll modes: WHEN a block asks SideCar for a fresh reading, per-block —
-// see MODULES.md's own section on this for the full design rationale.
-//  - 'user-message': the instant the PLAYER's own message is sent, before the AI
-//    has replied at all. No message-.extra snapshot (there's no new AI message
-//    yet to attach one to) — only the live bus/HUD update.
-//  - 'after-turn' (the default — "после хода"): after the AI's reply has fully
-//    landed AND, if Post-Turn Processor is enabled, after IT has finished
-//    deciding what to do with that same message too — see waitForPostProcess()
-//    below. This is the direct descendant of what this module used to do
-//    unconditionally for every block (GENERATION_STARTED-parallel dispatch,
-//    MESSAGE_RECEIVED apply); the difference now is only that it explicitly
-//    waits for Post-Turn Processor's rewrite first, so a tracked field is never
-//    read off text that's about to change out from under it.
-//  - 'every-n-turns': same as 'after-turn', but only once every N real AI
-//    replies (counted per block, in memory only — resets on module re-enable).
-//  - 'every-n-time': a real wall-clock timer, independent of message events
-//    entirely — see syncPollTimers(). No message to snapshot onto, so it only
-//    ever updates the live bus/HUD, same as 'user-message'.
-const POLL_MODES = Object.freeze(['user-message', 'after-turn', 'every-n-turns', 'every-n-time']);
-const POLL_MODE_OPTIONS = Object.freeze([
-    { id: 'user-message', name: 'During the turn (on your message)' },
-    { id: 'after-turn', name: 'After the reply completes (default)' },
-    { id: 'every-n-turns', name: 'Every N turns' },
-    { id: 'every-n-time', name: 'Every N minutes' },
-]);
-const DEFAULT_POLL_MODE = 'after-turn';
-const DEFAULT_POLL_TURNS = 3;
-const MIN_POLL_TURNS = 1;
-const MAX_POLL_TURNS = 50;
-const DEFAULT_POLL_MINUTES = 5;
-const MIN_POLL_MINUTES = 1;
-const MAX_POLL_MINUTES = 180;
-// How long a mode-2 block waits for Post-Turn Processor's own "done with this
-// message" signal before giving up and proceeding anyway — same "never wait
-// forever, even for a module that's mistaken about needing to" discipline
-// RoutePlanner.waitFor() already established for a conceptually identical problem.
-const POST_PROCESS_WAIT_TIMEOUT_MS = 15000;
-
-/** `block.pollMode`, defensively resolved — falls back to the default for a block saved before this feature existed, or a corrupted/unrecognized value. */
-export function resolvePollMode(block) {
-    return POLL_MODES.includes(block?.pollMode) ? block.pollMode : DEFAULT_POLL_MODE;
-}
-/** `block.pollTurns`, clamped — how many real AI replies between polls in 'every-n-turns' mode. */
-export function resolvePollTurns(block) {
-    const turns = Math.round(Number(block?.pollTurns));
-    return Number.isFinite(turns) ? Math.min(MAX_POLL_TURNS, Math.max(MIN_POLL_TURNS, turns)) : DEFAULT_POLL_TURNS;
-}
-/** `block.pollIntervalMinutes`, clamped and converted to milliseconds — the real setInterval() period for 'every-n-time' mode. */
-export function resolvePollIntervalMs(block) {
-    const minutes = Math.round(Number(block?.pollIntervalMinutes));
-    const clamped = Number.isFinite(minutes) ? Math.min(MAX_POLL_MINUTES, Math.max(MIN_POLL_MINUTES, minutes)) : DEFAULT_POLL_MINUTES;
-    return clamped * 60000;
-}
 
 const MODULE_DEFAULTS = Object.freeze({
     blocks: [],
@@ -194,70 +140,6 @@ export function buildLabel(state, fields, displayTemplate) {
 }
 
 /**
- * Runs ONE block's SideCar request against the CURRENT chat/state and writes the
- * result into the store — the one piece of work shared by all 4 poll modes; only
- * WHEN this gets called, and what (if anything) happens to the label afterward (a
- * message-.extra snapshot, or nothing), differs between them. Never throws:
- * `{ ok: true, nextState, label, fields }` on success, `{ ok: false, error }` on
- * any failure (no fields configured, SideCar rejected, an unparseable reply) — the
- * caller decides what to do with a failure (toast, log, snapshot-or-not).
- */
-export async function runBlockPoll(host, store, block) {
-    const fields = sanitizeFields(block.fields);
-    if (!fields.length) return { ok: false, error: new Error(`Tracker "${block.title}" has no fields configured.`) };
-    try {
-        const context = host.context();
-        const built = buildTrackerRequest(context.chat, block, store.get(block.id));
-        const text = await host.sidecar.request({ systemPrompt: built.systemPrompt, prompt: built.prompt, profileId: block.sidecarProfile });
-        const parsed = parseTrackerResponse(text, built.fields);
-        if (!parsed.data) throw new Error(`Tracker "${block.title}" got no usable data from SideCar.`);
-        const nextState = store.set(block.id, parsed.data, built.fields);
-        const label = buildLabel(nextState, built.fields, block.displayTemplate);
-        return { ok: true, nextState, label, fields: built.fields };
-    } catch (error) {
-        return { ok: false, error };
-    }
-}
-
-/**
- * Waits for Post-Turn Processor (see modules/postprocess/index.js) to finish
- * deciding what to do with `messageId` — including deciding to do nothing, if
- * autoRun is off or the message type is excluded — before an 'after-turn' block's
- * own request reads that message's FINAL text. Resolves immediately if Post-Turn
- * Processor isn't enabled at all (no 'postprocess' service registered) — "if it's
- * present," per the actual ask; never waits longer than
- * POST_PROCESS_WAIT_TIMEOUT_MS regardless, so a module mistaken about whether
- * Post-Turn will really signal can never hang a poll forever.
- *
- * Must be called SYNCHRONOUSLY (no `await` before it) from inside the very same
- * MESSAGE_RECEIVED handler Post-Turn Processor's own listener will also run
- * from — ST invokes every listener for one event in registration order, and each
- * one's SYNCHRONOUS portion (up to its first `await`) always runs before the
- * next listener is invoked, regardless of whether ST awaits each listener's own
- * promise. Calling this before any await guarantees the subscription below is in
- * place before Post-Turn Processor's own handler can possibly emit — otherwise a
- * signal that already fired before this subscribed would be missed entirely,
- * and this would wait out the full timeout for nothing every time.
- */
-export function waitForPostProcess(host, messageId, timeoutMs = POST_PROCESS_WAIT_TIMEOUT_MS) {
-    if (!host.services.isAvailable('postprocess')) return Promise.resolve();
-    const postprocess = host.services.request('postprocess');
-    if (typeof postprocess.onMessageHandled !== 'function') return Promise.resolve();
-    return new Promise(resolve => {
-        let done = false;
-        const finish = () => {
-            if (done) return;
-            done = true;
-            clearTimeout(timer);
-            unsubscribe();
-            resolve();
-        };
-        const unsubscribe = postprocess.onMessageHandled(handledId => { if (handledId === messageId) finish(); });
-        const timer = setTimeout(finish, timeoutMs);
-    });
-}
-
-/**
  * Shape of one tracker block as published on the shared data bus (namespace
  * "tracker", key `block:<id>`, this description merged with `{ state, updatedAt }`)
  * and in the `blocks` index. Never includes the block's SideCar profile, prompt
@@ -345,9 +227,6 @@ function createBlock() {
         systemPromptTemplate: DEFAULT_SYSTEM_PROMPT,
         promptTemplate: DEFAULT_PROMPT,
         displayTemplate: '',
-        pollMode: DEFAULT_POLL_MODE,
-        pollTurns: DEFAULT_POLL_TURNS,
-        pollIntervalMinutes: DEFAULT_POLL_MINUTES,
     };
 }
 
@@ -415,9 +294,6 @@ function getBlockUi(cache, block) {
             systemPromptTemplate: signal(block.systemPromptTemplate),
             promptTemplate: signal(block.promptTemplate),
             displayTemplate: signal(block.displayTemplate),
-            pollMode: signal(resolvePollMode(block)),
-            pollTurns: signal(resolvePollTurns(block)),
-            pollIntervalMinutes: signal(Math.round(resolvePollIntervalMs(block) / 60000)),
         });
     }
     return cache.get(block.id);
@@ -510,36 +386,6 @@ function renderBlockContent(block, ui, store, profiles, host) {
     );
 
     const profileSelect = Select(ui.sidecarProfile, profiles);
-    const pollModeSelect = Select(ui.pollMode, signal(POLL_MODE_OPTIONS));
-    pollModeSelect.addEventListener('change', () => {
-        block.pollMode = resolvePollMode({ pollMode: ui.pollMode.peek() });
-        ui.pollMode.set(block.pollMode);
-        host.saveModuleSettings();
-        host.data.get('publish')?.();
-    });
-    const pollSettings = h('div', { class: 'stme-tracker-poll-settings' },
-        show(computed(() => ui.pollMode() === 'every-n-turns'), on => {
-            if (!on) return null;
-            const slider = SliderField('Poll every N turns', ui.pollTurns, { min: MIN_POLL_TURNS, max: MAX_POLL_TURNS, step: 1 });
-            slider.querySelector('input').addEventListener('change', () => {
-                block.pollTurns = resolvePollTurns({ pollTurns: ui.pollTurns.peek() });
-                ui.pollTurns.set(block.pollTurns);
-                host.saveModuleSettings();
-            });
-            return slider;
-        }),
-        show(computed(() => ui.pollMode() === 'every-n-time'), on => {
-            if (!on) return null;
-            const slider = SliderField('Poll every N minutes', ui.pollIntervalMinutes, { min: MIN_POLL_MINUTES, max: MAX_POLL_MINUTES, step: 1 });
-            slider.querySelector('input').addEventListener('change', () => {
-                block.pollIntervalMinutes = Math.round(resolvePollIntervalMs({ pollIntervalMinutes: ui.pollIntervalMinutes.peek() }) / 60000);
-                ui.pollIntervalMinutes.set(block.pollIntervalMinutes);
-                host.saveModuleSettings();
-                host.data.get('publish')?.(); // reconciles the running setInterval() via syncPollTimers()
-            });
-            return slider;
-        }),
-    );
     const systemPromptArea = TextArea(ui.systemPromptTemplate, { rows: 4 });
     const promptArea = TextArea(ui.promptTemplate, { rows: 3 });
     const displayInput = TextInput(ui.displayTemplate, { placeholder: '❤ {health} · 📍 {location}' });
@@ -575,8 +421,6 @@ function renderBlockContent(block, ui, store, profiles, host) {
     wrap.append(
         fieldsSection,
         Field('SideCar profile', profileSelect),
-        Field('Poll timing', pollModeSelect, { hint: 'When to ask SideCar for this tracker\'s state.' }),
-        pollSettings,
         h('details', { class: 'stme-sampler' },
             h('summary', {}, 'Prompt templates ', h('small', {}, 'Advanced — placeholders: {fields}, {fieldsJson}, {current}, {context}')),
             h('div', { class: 'stme-tracker-templates' },
@@ -657,19 +501,8 @@ export const trackerModule = {
         const warn = (...args) => console.warn('[STME:tracker]', ...args);
         log('activate() starting.');
         const store = createTrackerStore(host.context);
-        // blockId currently mid-poll, across ANY of the 4 modes — guards against two
-        // overlapping requests for the same block (e.g. its 'every-n-time' timer firing
-        // again before a slow previous request has even resolved).
+        const pending = new Map();
         const running = new Set();
-        // blockId -> real AI replies seen since its last poll, for 'every-n-turns' —
-        // in-memory only, resets on module re-enable/page reload (same lifetime as
-        // `running` above; not worth persisting for a counter this cheap to just start
-        // fresh from).
-        const turnCounters = new Map();
-        // blockId -> { timer, intervalMs } for every block currently in 'every-n-time'
-        // mode — reconciled on every publish() call (i.e. every settings change), see
-        // syncPollTimers() below.
-        const pollTimers = new Map();
 
         // Publishes every block's description + current state to the shared data bus
         // (namespace "tracker": a `blocks` index plus one `block:<id>` entry each).
@@ -743,93 +576,9 @@ export const trackerModule = {
                     host.data.set(fieldKey, state[fieldName]);
                 }
             }
-            // Every settings change (add/remove/reorder a block, flip its mode, change
-            // N) goes through publish() already (the UI always calls
-            // host.data.get('publish')?.() after mutating settings) — reconciling
-            // timers here too means a poll-mode edit takes effect immediately, not
-            // just on next reload. Defined as a function declaration below (hoisted),
-            // so referencing it here, before its own textual definition, is safe —
-            // this call only ever actually RUNS once publish() itself is invoked.
-            syncPollTimers();
         };
         host.data.set('publish', publish);
-
-        /**
-         * Reconciles the live setInterval() timers against whichever blocks are
-         * CURRENTLY configured for 'every-n-time' — same "diff against last known
-         * state, add what's missing, drop what's gone" idea publish() already
-         * applies to bus channels, just for real timers instead. Called from
-         * publish() itself (i.e. after every settings change, not on a separate
-         * schedule) so switching a block's mode, changing N, disabling it, or
-         * deleting it entirely all take effect immediately, not just on next
-         * reload. A block whose interval is UNCHANGED keeps its already-running
-         * timer untouched — no reason to reset its countdown just because some
-         * OTHER block's settings changed too.
-         */
-        function syncPollTimers() {
-            const settings = host.moduleSettings(MODULE_DEFAULTS);
-            const currentIds = new Set();
-            for (const block of settings.blocks) {
-                if (block.enabled === false) continue;
-                if (resolvePollMode(block) !== 'every-n-time') continue;
-                currentIds.add(block.id);
-                const intervalMs = resolvePollIntervalMs(block);
-                const existing = pollTimers.get(block.id);
-                if (existing?.intervalMs === intervalMs) continue;
-                if (existing) clearInterval(existing.timer);
-                const timer = setInterval(() => {
-                    // Re-read the block fresh from settings on every tick — the
-                    // closed-over `block` above could be stale (title/fields/profile
-                    // edited) by the time a LATER tick fires.
-                    const current = host.moduleSettings(MODULE_DEFAULTS).blocks.find(item => item.id === block.id);
-                    if (current) runAndApply(current);
-                }, intervalMs);
-                pollTimers.set(block.id, { timer, intervalMs });
-                log(`Block "${block.title}" — polling every ${Math.round(intervalMs / 60000)} minute(s).`);
-            }
-            for (const [blockId, entry] of [...pollTimers]) {
-                if (currentIds.has(blockId)) continue;
-                clearInterval(entry.timer);
-                pollTimers.delete(blockId);
-            }
-        }
-
-        /**
-         * Runs one block's poll (runBlockPoll()) and applies the result: on
-         * success, snapshots the label onto `snapshotMessage.extra` if one was
-         * given (modes 2/3 only — see POLL_MODES' own doc comment for why modes
-         * 1/4 never pass one), always publish()es afterward so the HUD/bus/macro
-         * reflect the change immediately regardless of mode. Never throws — a
-         * failure toasts and is logged, same as the module always did. Guards
-         * against overlapping requests for the same block via `running`.
-         */
-        async function runAndApply(block, { snapshotMessage } = {}) {
-            if (running.has(block.id)) { log(`Block "${block.title}" — already mid-request, skipped.`); return false; }
-            if (!host.sidecar.isConfigured()) { warn(`Block "${block.title}" — SideCar not configured, skipped.`); return false; }
-            running.add(block.id);
-            try {
-                const result = await runBlockPoll(host, store, block);
-                if (!result.ok) throw result.error;
-                log(`Block "${block.title}" — polled (mode "${resolvePollMode(block)}"), label "${result.label}".`);
-                if (snapshotMessage && result.label) {
-                    snapshotMessage.extra ??= {};
-                    snapshotMessage.extra[TRACKER_EXTRA_KEY] ??= {};
-                    snapshotMessage.extra[TRACKER_EXTRA_KEY][block.id] = { title: block.title, label: result.label };
-                    return true; // a snapshot was actually written onto the message
-                }
-                if (snapshotMessage) warn(`Block "${block.title}" — parsed data produced an empty label, skipping this message's snapshot.`, result.nextState);
-                return !snapshotMessage; // no snapshot requested (mode 1) still counts as a successful poll
-            } catch (error) {
-                console.error(`[ST Module Engine] Tracker "${block.title}" SideCar request failed:`, error);
-                host.toast('warning', error?.message || 'Could not update tracked state.', block.title);
-                return false;
-            } finally {
-                running.delete(block.id);
-                publish();
-            }
-        }
-
-        publish(); // also runs syncPollTimers() itself, see its own trailing comment above
+        publish();
 
         // --- Service: any other module can ask Tracker to track a value for it,
         // without configuring a block by hand. The REQUESTING module is the
@@ -956,40 +705,44 @@ export const trackerModule = {
         });
         const unmakeDraggable = makeHudDraggable(hud, host);
 
-        // --- Mode 1 ('user-message'): the instant the PLAYER's own message is sent,
-        // before the AI has replied at all — no message to snapshot onto yet, only
-        // the live bus/HUD gets updated (see runAndApply()'s own doc comment).
-        const sent = host.onEvent('MESSAGE_SENT', () => {
+        const start = host.onEvent('GENERATION_STARTED', () => {
+            if (!host.sidecar.isConfigured()) { warn('GENERATION_STARTED ignored — SideCar is not configured. Per-worker state:', host.sidecar.diagnostics()); return; }
+            const context = host.context();
             const settings = host.moduleSettings(MODULE_DEFAULTS);
-            const blocks = settings.blocks.filter(block => block.enabled !== false && resolvePollMode(block) === 'user-message');
-            if (!blocks.length) return;
-            log(`MESSAGE_SENT — polling ${blocks.length} 'user-message'-mode block(s).`);
-            for (const block of blocks) runAndApply(block);
+            if (!settings.blocks.length) { log('GENERATION_STARTED — no tracker blocks configured, nothing to request.'); return; }
+            let sent = 0;
+            for (const block of settings.blocks) {
+                if (!block.enabled) { log(`Block "${block.title}" skipped — disabled.`); continue; }
+                if (pending.has(block.id)) { log(`Block "${block.title}" skipped — a request is already pending.`); continue; }
+                const fields = sanitizeFields(block.fields);
+                if (!fields.length) { log(`Block "${block.title}" skipped — no fields configured.`); continue; }
+                const built = buildTrackerRequest(context.chat, block, store.get(block.id));
+                log(`Block "${block.title}" — sending SideCar request (profile "${block.sidecarProfile}", fields: ${fields.map(f => f.name).join(', ')}).`);
+                sent++;
+                pending.set(block.id, host.sidecar
+                    .request({ systemPrompt: built.systemPrompt, prompt: built.prompt, profileId: block.sidecarProfile })
+                    .then(text => { log(`Block "${block.title}" — SideCar replied:`, text); return { text, fields: built.fields }; })
+                    .catch(error => { warn(`Block "${block.title}" — SideCar request rejected:`, error); return { error }; }));
+            }
+            log(`GENERATION_STARTED — ${sent} request(s) sent, ${settings.blocks.length - sent} block(s) skipped.`);
         });
 
-        // --- Modes 2 ('after-turn', the default) and 3 ('every-n-turns'): both react
-        // to the AI's reply actually landing; the only difference is whether EVERY
-        // landing triggers a poll or only every Nth one.
         const received = host.onEvent('MESSAGE_RECEIVED', async (messageId, type) => {
-            const settings = host.moduleSettings(MODULE_DEFAULTS);
-            const afterTurnBlocks = settings.blocks.filter(block => block.enabled !== false && resolvePollMode(block) === 'after-turn');
-            const everyNTurnsBlocks = settings.blocks.filter(block => block.enabled !== false && resolvePollMode(block) === 'every-n-turns');
-            log(`MESSAGE_RECEIVED (messageId=${messageId}, type=${type}) — ${afterTurnBlocks.length} 'after-turn', ${everyNTurnsBlocks.length} 'every-n-turns' block(s) configured.`);
-
-            // Subscribed HERE, synchronously, before any `await` below — see
-            // waitForPostProcess()'s own doc comment for why this ordering is what
-            // makes it race-free against Post-Turn Processor's own MESSAGE_RECEIVED
-            // listener. Computed once per cycle and shared by every 'after-turn'
-            // block below, not once per block — a SECOND, later subscribe() call
-            // would miss a signal Post-Turn Processor already emitted for the first.
-            const postProcessWait = afterTurnBlocks.length ? waitForPostProcess(host, messageId) : null;
-
+            log(`MESSAGE_RECEIVED (messageId=${messageId}, type=${type}), ${pending.size} pending request(s).`);
+            if (!pending.size) { log('Ignored — no pending SideCar requests.'); return; }
+            // Always drop whatever was pending once a MESSAGE_RECEIVED fires for it —
+            // even for an excluded type. Leaving it in place used to mean the NEXT real
+            // generation's GENERATION_STARTED would see pending.has(block.id) still true
+            // and skip sending a fresh request for that block, silently breaking
+            // tracking until something eventually consumed the stale entry.
+            const requests = [...pending.entries()];
+            pending.clear();
             if (IGNORED_MESSAGE_TYPES.includes(type)) { log(`Ignored — message type "${type}" is excluded.`); return; }
-            if (!afterTurnBlocks.length && !everyNTurnsBlocks.length) return;
 
             const context = host.context();
             const resolved = resolveMessage(context.chat ?? [], messageId);
-            if (!resolved?.message) { warn(`Could not resolve a chat message for id ${messageId}.`); return; }
+
+            if (!resolved?.message) { warn(`Could not resolve a chat message for id ${messageId} — pending requests dropped.`); return; }
             if (resolved.message.is_user || resolved.message.is_system) { log('Ignored — message is from the user or is a system message.'); return; }
 
             // A reroll (regenerate, or swiping to a brand-new response) reuses the SAME
@@ -1001,27 +754,49 @@ export const trackerModule = {
                 delete resolved.message.extra[TRACKER_EXTRA_KEY];
             }
 
+            const settings = host.moduleSettings(MODULE_DEFAULTS);
             let changed = false;
+            for (const [blockId, requestPromise] of requests) {
+                if (running.has(blockId)) { log(`Block ${blockId} — already applying a previous result, skipped.`); continue; }
+                const block = settings.blocks.find(item => item.id === blockId);
+                if (!block) { warn(`Block ${blockId} — no longer exists in settings, dropping its result.`); continue; }
+                if (resolved.message.extra?.[TRACKER_EXTRA_KEY]?.[blockId]) { log(`Block "${block.title}" — message already has a snapshot, skipped.`); continue; }
 
-            for (const block of afterTurnBlocks) {
-                if (resolved.message.extra?.[TRACKER_EXTRA_KEY]?.[block.id]) { log(`Block "${block.title}" — message already has a snapshot, skipped.`); continue; }
-                await postProcessWait;
-                if (await runAndApply(block, { snapshotMessage: resolved.message })) changed = true;
-            }
+                running.add(blockId);
+                try {
+                    const result = await requestPromise;
+                    if (result?.error) throw result.error;
+                    const parsed = parseTrackerResponse(result.text, result.fields);
+                    if (!parsed.data) throw new Error(`Tracker "${block.title}" got no usable data from SideCar.`);
 
-            for (const block of everyNTurnsBlocks) {
-                const target = resolvePollTurns(block);
-                const count = (turnCounters.get(block.id) ?? 0) + 1;
-                if (count < target) { turnCounters.set(block.id, count); log(`Block "${block.title}" — turn ${count}/${target}, not polling yet.`); continue; }
-                turnCounters.set(block.id, 0);
-                if (resolved.message.extra?.[TRACKER_EXTRA_KEY]?.[block.id]) { log(`Block "${block.title}" — message already has a snapshot, skipped.`); continue; }
-                if (await runAndApply(block, { snapshotMessage: resolved.message })) changed = true;
+                    const nextState = store.set(blockId, parsed.data, result.fields);
+                    // Tracker never renders anything into the chat transcript (see the
+                    // module-level doc comment) — this label is only a lightweight audit
+                    // snapshot on the message itself (also doubles as the "already handled
+                    // this message" guard above) and isn't shown anywhere. The real display
+                    // surface is the floating panel (renderHud below), reading live state
+                    // straight off the bus, one field per row.
+                    const label = buildLabel(nextState, result.fields, block.displayTemplate);
+                    if (!label) { warn(`Block "${block.title}" — parsed data produced an empty label, skipping this message's snapshot.`, nextState); continue; }
+
+                    resolved.message.extra ??= {};
+                    resolved.message.extra[TRACKER_EXTRA_KEY] ??= {};
+                    resolved.message.extra[TRACKER_EXTRA_KEY][blockId] = { title: block.title, label };
+                    changed = true;
+                    log(`Block "${block.title}" — recorded label "${label}" for message #${resolved.index}.`);
+                } catch (error) {
+                    console.error(`[ST Module Engine] Tracker "${block?.title ?? blockId}" SideCar request failed:`, error);
+                    host.toast('warning', error?.message || 'Could not update tracked state.', block?.title || 'Tracker');
+                } finally {
+                    running.delete(blockId);
+                }
             }
 
             if (changed) {
                 updateMessage(context, resolved.index, resolved.message);
+                publish();
             } else {
-                log('MESSAGE_RECEIVED handled — no block produced a usable snapshot, nothing changed on the message itself.');
+                log('MESSAGE_RECEIVED handled — no block produced a usable label, nothing changed.');
             }
         });
 
@@ -1029,9 +804,7 @@ export const trackerModule = {
         log('activate() complete.');
 
         return () => {
-            sent(); received(); chatChangedUnsub();
-            for (const entry of pollTimers.values()) clearInterval(entry.timer);
-            pollTimers.clear();
+            start(); received(); chatChangedUnsub();
             unsubBlocksIndex();
             for (const unsub of blockSubs.values()) unsub();
             unmakeDraggable();
@@ -1109,8 +882,6 @@ export const trackerModule = {
         .stme-settings .stme-tracker-field-add { display: grid; grid-template-columns: minmax(120px, .35fr) 1fr auto; gap: 8px; align-items: center; }
         .stme-settings .stme-tracker-empty { margin: 0; padding: 8px; opacity: .65; font-size: .9em; }
         .stme-settings .stme-tracker-templates { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-        .stme-settings .stme-tracker-poll-settings:empty { display: none; }
-        .stme-settings .stme-tracker-poll-settings { display: flex; flex-direction: column; gap: 4px; }
         .stme-settings .stme-tracker-display { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius); background: rgba(0, 0, 0, .06); }
         .stme-settings .stme-tracker-display-head { display: flex; flex-direction: column; gap: 2px; }
         .stme-settings .stme-tracker-display-head small { opacity: .7; }

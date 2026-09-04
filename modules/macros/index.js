@@ -118,16 +118,8 @@ export function insertAtCursor(textarea, sourceSignal, text) {
  * own "requires Tracker" hint already uses, not live-reactive) is enough to decide
  * whether to show it at all; no bus subscription needed for a key that's always spelled
  * the same way.
- *
- * `lorebookEntries` is the Lorebook service's own `publishedEntries` index (see
- * core/lorebook-service.js's `#refreshPublishedIndex()`) — every entry a user has
- * toggled "Publish" on from that service's own settings card, each one a real
- * `get "lorebook:entry:<book>:<uid>"` key, same "real address, never a hand-typed
- * guess" reasoning the tracker fields above already follow. Unpublished entries
- * (the vast majority of any real lorebook) never show up here — publishing is the
- * explicit, per-entry opt-in that makes an entry's content readable at all.
  */
-function renderInsertPicker(sourceArea, ui, trackerBlocks, timeAvailable, lorebookEntries) {
+function renderInsertPicker(sourceArea, ui, trackerBlocks, timeAvailable) {
     return h('details', { class: 'stme-macro-tracker-picker' },
         h('summary', {}, 'Insert a value ', h('small', {}, "Real keys for your other modules — click one to insert it at the cursor.")),
         h('div', { class: 'stme-macro-tracker-picker-body' },
@@ -140,7 +132,7 @@ function renderInsertPicker(sourceArea, ui, trackerBlocks, timeAvailable, lorebo
                     }),
                 ),
             ) : null,
-            show(computed(() => trackerBlocks().length === 0 && !timeAvailable && lorebookEntries().length === 0), empty => empty
+            show(computed(() => trackerBlocks().length === 0 && !timeAvailable), empty => empty
                 ? h('p', { class: 'stme-macro-empty' }, 'No trackers configured yet — add one in the Tracker module first.')
                 : null),
             list(trackerBlocks, block => block.id, block => h('div', { class: 'stme-macro-tracker-block' },
@@ -154,15 +146,6 @@ function renderInsertPicker(sourceArea, ui, trackerBlocks, timeAvailable, lorebo
                         : h('small', { class: 'stme-macro-empty' }, 'No fields on this tracker yet.'),
                 ),
             )),
-            show(computed(() => lorebookEntries().length > 0), any => any ? h('div', { class: 'stme-macro-tracker-block' },
-                h('strong', {}, 'Lorebook'),
-                h('div', { class: 'stme-macro-tracker-fields' },
-                    list(lorebookEntries, entry => `${entry.book}:${entry.uid}`, entry => Chip(entry.name, {
-                        title: `get "lorebook:entry:${entry.book}:${entry.uid}"`,
-                        onClick: () => insertAtCursor(sourceArea, ui.source, `get "lorebook:entry:${entry.book}:${entry.uid}"`),
-                    })),
-                ),
-            ) : null),
         ),
     );
 }
@@ -247,12 +230,6 @@ export const macrosModule = {
         const trackerBlocks = signal(host.data.read('tracker', 'blocks', []));
         onDispose(container, host.data.subscribe('tracker', 'blocks', next => trackerBlocks.set(next ?? [])));
         const timeAvailable = host.services.isAvailable('time');
-        // Same read-only cross-module wiring, for the Lorebook service's own
-        // publishedEntries index (core/lorebook-service.js) — independent of
-        // ModuleEngine (not a module to check isAvailable() against), so this reads
-        // straight off the shared bus namespace like the tracker index above.
-        const lorebookEntries = signal(host.data.read('lorebook', 'publishedEntries', []));
-        onDispose(container, host.data.subscribe('lorebook', 'publishedEntries', next => lorebookEntries.set(next ?? [])));
 
         function getUi(program) {
             if (!blockUiCache.has(program.id)) {
@@ -285,7 +262,7 @@ export const macrosModule = {
             ];
         }
 
-        function renderContent(program, ui, trackerBlocks, timeAvailable, lorebookEntries) {
+        function renderContent(program, ui, trackerBlocks, timeAvailable) {
             const status = signal(host.data.get(`status:${program.id}`, null));
             const wrap = h('div', { class: 'stme-macro-block' });
             const unsubStatus = host.data.subscribe(MODULE_ID, `status:${program.id}`, next => status.set(next ?? null));
@@ -323,7 +300,7 @@ export const macrosModule = {
                     const sourceArea = TextArea(ui.source, { rows: 8, placeholder: 'set x to get "tracker:field:<id>:health"\nreturn x' });
                     return h('div', { class: 'stme-macro-code' },
                         sourceArea,
-                        renderInsertPicker(sourceArea, ui, trackerBlocks, timeAvailable, lorebookEntries),
+                        renderInsertPicker(sourceArea, ui, trackerBlocks, timeAvailable),
                         h('small', {}, `Time limit: ${DEFAULT_TIME_LIMIT_MS}ms per run. A macro that fails or times out shows a visible "[macro error: name]" placeholder instead of silently disappearing.`),
                         h('div', { class: 'stme-macro-actions' },
                             Button('Save macro', save),
@@ -351,7 +328,7 @@ export const macrosModule = {
             onToggleOpen: (program, open) => { program.collapsed = !open; host.saveModuleSettings(); },
             onReorder: next => { programs.set(next); settings.programs = next; host.saveModuleSettings(); },
             renderHeader: program => renderHeader(program, getUi(program)),
-            renderContent: program => renderContent(program, getUi(program), trackerBlocks, timeAvailable, lorebookEntries),
+            renderContent: program => renderContent(program, getUi(program), trackerBlocks, timeAvailable),
             className: 'stme-macro',
         });
 

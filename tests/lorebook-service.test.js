@@ -2,9 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ModuleDataBus } from '../core/data-bus.js';
 import {
-    LorebookService, resolveBookNames, summarizeEntry, matchesFilter, mergeBooks, macroSlug,
+    LorebookService, resolveBookNames, summarizeEntry, matchesFilter, mergeBooks,
 } from '../core/lorebook-service.js';
-import { installFakeDom, captureRealDom, restoreRealDom } from './helpers/fake-dom.js';
 
 // --- Pure functions (carried over from the retired module — same behavior) ---
 
@@ -56,30 +55,6 @@ test('mergeBooks flattens entries from multiple books and skips one that failed 
     });
     assert.equal(summaries.length, 1);
     assert.equal(byUid.size, 1);
-});
-
-// --- Regression: ST assigns uids per-file starting from 0, so two SEPARATELY
-// bound books (a chat's own + its character's own — exactly what
-// resolveBookNames() can return together) commonly share the same numeric uid
-// for two completely different entries. #byUid used to be keyed by bare uid
-// alone, so the SECOND book's entry silently overwrote the first's — get(uid)
-// for the first book's entry would then return the wrong book's content
-// entirely, which is exactly the kind of thing a "publish this entry as a
-// macro" feature must never do.
-
-test('mergeBooks keeps BOTH entries when two different books share the same numeric uid', () => {
-    const { byUid } = mergeBooks({
-        Chat: { entries: { 0: { uid: 0, comment: 'Chat Entry', content: 'chat content' } } },
-        Character: { entries: { 0: { uid: 0, comment: 'Character Entry', content: 'character content' } } },
-    });
-    assert.equal(byUid.size, 2, 'both entries must survive — a bare-uid key would let one overwrite the other');
-    assert.equal(byUid.get('Chat:0').content, 'chat content');
-    assert.equal(byUid.get('Character:0').content, 'character content');
-});
-
-test('macroSlug produces a stable, collision-avoidant, lowercase macro name prefixed with "lorebook"', () => {
-    assert.equal(macroSlug('My Book', 'Dragon Lore'), 'lorebook_my_book_dragon_lore');
-    assert.equal(macroSlug('a', 'b'), 'lorebook_a_b');
 });
 
 // --- LorebookService: independent of ModuleEngine, talks only to a bare ModuleDataBus ---
@@ -150,7 +125,7 @@ test('createEntry: read-modify-write against the book, assigns a fresh uid, upda
     assert.ok(service.get(1));
 });
 
-test('createEntry defaults to the first active book, and throws with a clear message when none is active and none given', async () => {
+test('createEntry defaults to the first bound book, and throws with a clear message when none is bound and none given', async () => {
     const bus = new ModuleDataBus();
     const { context } = makeFakeContext({ 'Story Book': { entries: {} } });
     const service = new LorebookService(() => context, bus);
@@ -160,7 +135,7 @@ test('createEntry defaults to the first active book, and throws with a clear mes
 
     context.chatMetadata = {};
     await service.scan();
-    await assert.rejects(() => service.createEntry({ comment: 'Y' }), /no lorebook active/);
+    await assert.rejects(() => service.createEntry({ comment: 'Y' }), /no book bound/);
 });
 
 test('updateEntry merges a patch into the existing entry and emits entryUpdated with both versions', async () => {
@@ -230,160 +205,4 @@ test('a listener that throws does not stop other listeners or break emit()', asy
     service.on('entryCreated', () => { goodCalls++; });
     await assert.doesNotReject(() => service.createEntry({ comment: 'X' }));
     assert.equal(goodCalls, 1);
-});
-
-// --- get(uid, book) disambiguation, against the REAL service (not just
-// mergeBooks() in isolation) — two bound books sharing a numeric uid.
-
-function makeTwoBookContext() {
-    return {
-        chatMetadata: { world_info: 'Chat Book' },
-        characterId: 0,
-        characters: [{ data: { extensions: { world: 'Character Book' } } }],
-        eventTypes: {}, eventSource: { on() {}, off() {} },
-        loadWorldInfo: async name => ({
-            'Chat Book': { entries: { 0: { uid: 0, comment: 'Chat Entry', content: 'chat content' } } },
-            'Character Book': { entries: { 0: { uid: 0, comment: 'Character Entry', content: 'character content' } } },
-        }[name] ?? null),
-        saveWorldInfo: async () => {},
-    };
-}
-
-test('get(uid, book) disambiguates two bound books sharing the same numeric uid; bare get(uid) returns SOME real match, never a mix-up', async () => {
-    const bus = new ModuleDataBus();
-    const context = makeTwoBookContext();
-    const service = new LorebookService(() => context, bus);
-    await service.start();
-
-    assert.equal(service.get(0, 'Chat Book').content, 'chat content');
-    assert.equal(service.get(0, 'Character Book').content, 'character content');
-    assert.ok(['chat content', 'character content'].includes(service.get(0).content));
-});
-
-// --- Publishing: toggle an entry into a real {{macro}} + bus channel ---
-
-function makeMacroContext(overrides = {}) {
-    const registered = new Map();
-    return {
-        registered,
-        context: {
-            chatMetadata: { world_info: 'Story Book' },
-            characterId: 0, characters: [{ data: { extensions: {} } }],
-            eventTypes: {}, eventSource: { on() {}, off() {} },
-            extensionSettings: {},
-            saveSettingsDebounced() {},
-            registerMacro: (name, handler) => registered.set(name, handler),
-            unregisterMacro: name => registered.delete(name),
-            loadWorldInfo: async name => (name === 'Story Book' ? { entries: { 0: { uid: 0, comment: 'Dragon Lore', content: 'Dragons breathe fire.' } } } : null),
-            saveWorldInfo: async () => {},
-            ...overrides,
-        },
-    };
-}
-
-test('publishEntry registers a real ST macro and a bus value holding the entry\'s full content', async () => {
-    const { context, registered } = makeMacroContext();
-    const bus = new ModuleDataBus({ getContext: () => context }); // real macro registration needs the bus's own getContext wired, not just the service's
-    const service = new LorebookService(() => context, bus);
-    await service.start();
-
-    assert.equal(service.isPublished('Story Book', 0), false);
-    service.publishEntry('Story Book', 0);
-
-    assert.equal(service.isPublished('Story Book', 0), true);
-    assert.equal(registered.get('lorebook_story_book_dragon_lore')(), 'Dragons breathe fire.');
-    assert.equal(bus.get('lorebook', 'entry:Story Book:0'), 'Dragons breathe fire.');
-});
-
-test('unpublishEntry retires both the macro and the bus value immediately', async () => {
-    const { context, registered } = makeMacroContext();
-    const bus = new ModuleDataBus({ getContext: () => context });
-    const service = new LorebookService(() => context, bus);
-    await service.start();
-    service.publishEntry('Story Book', 0);
-
-    service.unpublishEntry('Story Book', 0);
-
-    assert.equal(service.isPublished('Story Book', 0), false);
-    assert.equal(registered.has('lorebook_story_book_dragon_lore'), false);
-    assert.equal(bus.get('lorebook', 'entry:Story Book:0'), undefined);
-});
-
-test('a published entry survives a rescan (e.g. a chat switch) as long as it still exists', async () => {
-    const { context, registered } = makeMacroContext();
-    const bus = new ModuleDataBus({ getContext: () => context });
-    const service = new LorebookService(() => context, bus);
-    await service.start();
-    service.publishEntry('Story Book', 0);
-
-    await service.scan();
-
-    assert.equal(service.isPublished('Story Book', 0), true);
-    assert.equal(registered.get('lorebook_story_book_dragon_lore')(), 'Dragons breathe fire.');
-});
-
-test('a published entry\'s macro/bus value is retired once the entry itself is deleted from the book', async () => {
-    const { context, registered } = makeMacroContext();
-    const bus = new ModuleDataBus({ getContext: () => context });
-    const service = new LorebookService(() => context, bus);
-    await service.start();
-    service.publishEntry('Story Book', 0);
-
-    context.loadWorldInfo = async () => ({ entries: {} }); // the entry is gone now
-    await service.scan();
-
-    assert.equal(registered.has('lorebook_story_book_dragon_lore'), false, 'a stale macro pointing at a deleted entry must not keep resolving');
-    assert.equal(bus.get('lorebook', 'entry:Story Book:0'), undefined);
-});
-
-test('publishEntry persists across a fresh LorebookService instance reading the same context (survives a page reload)', async () => {
-    const { context, registered } = makeMacroContext();
-    const bus = new ModuleDataBus({ getContext: () => context });
-    const service = new LorebookService(() => context, bus);
-    await service.start();
-    service.publishEntry('Story Book', 0);
-
-    // A new instance, same context — simulates a page reload re-constructing the service.
-    const bus2 = new ModuleDataBus({ getContext: () => context });
-    const service2 = new LorebookService(() => context, bus2);
-    await service2.start();
-
-    assert.equal(service2.isPublished('Story Book', 0), true);
-    assert.equal(registered.get('lorebook_story_book_dragon_lore')(), 'Dragons breathe fire.');
-});
-
-// --- render(): the real Base-settings card, through a real (if minimal) fake DOM ---
-
-test('render() lists a real entry as a card and its Publish toggle actually calls publishEntry/unpublishEntry', async () => {
-    const previousDom = captureRealDom();
-    installFakeDom();
-    try {
-        const { context, registered } = makeMacroContext();
-        const bus = new ModuleDataBus({ getContext: () => context });
-        const service = new LorebookService(() => context, bus);
-        await service.start();
-
-        const container = document.createElement('div');
-        const toasts = [];
-        service.render(container, (level, message) => toasts.push({ level, message }));
-
-        function findCheckbox(node) {
-            if (node.type === 'checkbox') return node;
-            for (const child of node.childNodes) { const found = findCheckbox(child); if (found) return found; }
-            return null;
-        }
-        const checkbox = findCheckbox(container);
-        assert.ok(checkbox, 'the Publish toggle checkbox was not found in the rendered card');
-        assert.equal(service.isPublished('Story Book', 0), false);
-
-        checkbox.checked = true;
-        checkbox.fire('change');
-        assert.equal(service.isPublished('Story Book', 0), true);
-        assert.equal(registered.get('lorebook_story_book_dragon_lore')(), 'Dragons breathe fire.', 'the toggle must drive the SAME real publish path publishEntry() itself uses');
-
-        checkbox.checked = false;
-        checkbox.fire('change');
-        assert.equal(service.isPublished('Story Book', 0), false);
-        assert.equal(registered.has('lorebook_story_book_dragon_lore'), false);
-    } finally { restoreRealDom(previousDom); }
 });

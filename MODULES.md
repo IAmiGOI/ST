@@ -986,89 +986,6 @@ Both live in `modules/tracker/index.js`. A live consumer of both sides is the **
 module (`modules/music/index.js`): it asks Tracker for `classify` to get the scene's
 keys, then picks a track by them.
 
-### Worked example: Tracker's per-block poll timing (4 modes)
-
-Every hand-configured Tracker block picks **when** it asks SideCar for a fresh reading —
-independently of every other block, via `block.pollMode` (defaults to `'after-turn'` for
-a block saved before this feature existed, resolved defensively by `resolvePollMode()`):
-
-1. **`'user-message'`** — fires the instant the *player's own* message is sent
-   (`MESSAGE_SENT`), before the AI has replied at all. There's no new AI message yet to
-   attach a snapshot to, so this mode only ever updates the live bus/HUD — never a
-   `message.extra` snapshot.
-2. **`'after-turn'`** (the default) — fires once the AI's reply has fully landed
-   (`MESSAGE_RECEIVED`), same as every block used to behave unconditionally before this
-   feature. The one addition: if Post-Turn Processor (`modules/postprocess/index.js`) is
-   enabled, an `'after-turn'` block waits for it to finish deciding what to do with that
-   *same* message first — see "Waiting for Post-Turn Processor" below — so a tracked
-   field is never read off text that's about to be rewritten out from under it.
-3. **`'every-n-turns'`** — same trigger as `'after-turn'`, throttled to every Nth real AI
-   reply (`block.pollTurns`, via `resolvePollTurns()`). The counter (`turnCounters`, a
-   plain `Map<blockId, count>`) is in-memory only — it resets on module re-enable or page
-   reload, the same lifetime as the overlap-guard `running` Set below.
-4. **`'every-n-time'`** — a real `setInterval()`, entirely independent of chat events
-   (`block.pollIntervalMinutes`, via `resolvePollIntervalMs()`). Like mode 1, there's no
-   message to snapshot onto, so it only calls `publish()` — deliberately **not** anything
-   that would push the fresh value to a consumer like Music (`host.services.ask('tracker',
-   'classify', ...)`): Macros' own `{{macro}}` substitutions are already live/pull-based
-   (`compute()` runs fresh on every resolution, no push needed), and auto-triggering Music
-   on every periodic poll risked an unexplained track change mid-session with no player
-   action behind it. A module that wants to react to a periodic poll can still `subscribe()`
-   to the bus channel itself — this mode just doesn't do that pushing *for* it.
-
-All 4 modes funnel through the same two functions, both exported for direct testing:
-
-- **`runBlockPoll(host, store, block)`** — the one piece of request-and-store-write logic
-  every mode shares (build the request, call SideCar, parse the reply, write the store).
-  Never throws: `{ ok: true, nextState, label, fields }` or `{ ok: false, error }`.
-- **`runAndApply(block, { snapshotMessage })`** (internal to `activate()`) — wraps
-  `runBlockPoll` with the `running` Set overlap-guard (so e.g. a slow request doesn't
-  overlap with the *same* block's next timer tick), an optional `message.extra` snapshot
-  (only when `snapshotMessage` is passed — modes 2/3, never 1/4), a toast on failure, and
-  always `publish()`s in its `finally` — so no caller needs a separate `publish()` call
-  after it.
-
-#### Waiting for Post-Turn Processor: a subscribe-before-emit race, avoided on purpose
-
-Post-Turn Processor registers a `'postprocess'` service with one method:
-`onMessageHandled(listener)`, returning an unsubscribe function. Its own `MESSAGE_RECEIVED`
-handler body is wrapped in `try { ... } finally { notify every listener with messageId }`,
-so the signal fires exactly once per real `MESSAGE_RECEIVED` — success, "nothing to do
-because autoRun is off", an excluded message type, all of it — never only on success.
-
-`waitForPostProcess(host, messageId, timeoutMs?)` resolves immediately if `'postprocess'`
-isn't registered at all (Post-Turn Processor disabled — "if it's present," per the actual
-feature request), and otherwise subscribes and waits, capped by
-`POST_PROCESS_WAIT_TIMEOUT_MS` (15s) so a module mistaken about whether Post-Turn will
-really signal can never hang a poll forever.
-
-The reason this needs its own doc comment (see the function itself in
-`modules/tracker/index.js`): ST invokes every listener for one event in registration
-order, and each listener's *synchronous* portion (up to its first `await`) always runs
-before the next listener is invoked — regardless of whether ST itself awaits each
-listener's promise. `waitForPostProcess` subscribes synchronously, before returning a
-`Promise`; calling it before any `await` in Tracker's own `MESSAGE_RECEIVED` handler
-guarantees that subscription is in place before Post-Turn Processor's own handler
-(registered later) can possibly emit. The handler computes this wait **once per
-`MESSAGE_RECEIVED` cycle** — shared by every `'after-turn'` block via the same `Promise`
-— never once per block inside the loop: a *second*, later `waitForPostProcess()` call
-would subscribe too late to see a signal Post-Turn Processor already emitted for the
-first block, and would wait out the full 15s timeout for nothing.
-`tests/tracker-poll-modes.test.js` covers this scenario end to end (two SideCar polls
-gated behind one shared signal, resolving together, not one after the other).
-
-#### `syncPollTimers()`: reconciling real timers the same way channels get reconciled
-
-`'every-n-time'` blocks get a real `setInterval()`, tracked in `pollTimers` (`Map<blockId,
-{ timer, intervalMs }>`). `syncPollTimers()` is called from *inside* `publish()` itself —
-so every settings change that goes through `publish()` (a mode switch, an interval change,
-enabling/disabling/deleting a block) reconciles timers immediately, on the same "diff
-current config against last-known state, add what's missing, remove what's gone" idiom
-[Pattern: reconciling a dynamic set of channels](#pattern-reconciling-a-dynamic-set-of-channels)
-already established for bus channels — just applied to real timers instead. A block whose
-interval is unchanged keeps its running timer untouched (no needless countdown reset from
-a save that didn't actually change that value).
-
 ## The UI framework: `core/reactive.js` + `core/dom.js` + `core/widgets.js`
 
 Everything `render()` needs is one import from `core/widgets.js` (it re-exports what it
@@ -1257,38 +1174,6 @@ node graph, or a different backend) can be built later without a rewrite unless 
 piece is already decoupled from `ModuleEngine` and shaped like a mutable, observable
 store rather than "a WI-specific reader." Nothing graph-shaped exists yet — this is
 only about not painting that door shut.
-
-**A real settings-card UI, without becoming a module.** `LorebookService` also owns a
-`render(container, toast)` — a read-only browser over every scanned entry, each with a
-"Publish as `{{macro}}`" toggle that exposes that ONE entry's full content as a real ST
-macro AND a bus value (`host.data.read('lorebook', 'entry:<book>:<uid>')`), the exact
-same dual exposure Tracker's per-field macros and RP Time's `{{rp_time}}` already get —
-so a published lorebook entry is usable anywhere in ST, or read by any module, without
-that module needing to know anything about World Info. Toggle state persists under its
-own `extensionSettings` key (`{ [book]: { [uid]: true } }` — not a flat
-`${book}:${uid}` string, since a book's own name can itself contain a colon) and is
-re-applied after every `scan()`, retiring the macro/bus value cleanly if the underlying
-entry is ever deleted.
-
-Getting this card to actually sit in **Base settings**, next to SideCar Manager, without
-`ModuleEngine` ever importing or knowing about `LorebookService` needed one small,
-generic addition: `engine.addBaseCard({ key, title, description, render })` — the exact
-same "the engine has no built-in knowledge of what it's rendering" principle
-`host.services` already follows, just for a settings CARD instead of a callable API.
-`index.js` calls it once, after constructing `lorebook` and before the first
-`engine.mount()` call (a card registered after mount() already ran only appears the
-next time mount() runs again, e.g. the full-screen panel's own later, lazy call).
-
-**A real bug this surfaced**: `mergeBooks()`'s internal entry map used to be keyed by
-bare `uid` alone. ST assigns uids per-file starting from 0, so the SAME uid commonly
-appears in two DIFFERENT bound books (a chat's own + its character's own — exactly the
-pair `resolveBookNames()` can return together) — a bare-uid key let the second book's
-entry silently overwrite the first's, which a "publish this exact entry" feature can
-never tolerate (publishing the wrong book's content under the right-looking macro name).
-Fixed by keying on `${book}:${uid}`; `get(uid)` still works without a book for the
-common single-relevant-book case (first match across bound books), and `get(uid, book)`
-disambiguates when it matters — every internal caller that already knows the book
-passes it.
 
 **Practical rule of thumb**: reach for this shape (independent class + `index.js`
 constructs/starts it + bus-only) when a capability isn't "a module a user enables" and

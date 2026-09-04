@@ -225,10 +225,6 @@ function makeHost(chat, overrides = {}) {
         // throw; this file's own tests are about pipeline/reroll logic, not badge
         // rendering, which time-bus-export.test.js-style engine tests would cover.
         data: { read: () => undefined },
-        // Minimal fake for host.services.register('postprocess', {onMessageHandled}) —
-        // real enough for activate() not to throw; tests/postprocess-signal.test.js
-        // covers the onMessageHandled contract itself.
-        services: { register: () => {} },
     };
     return { host, listeners, context, settings };
 }

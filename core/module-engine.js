@@ -97,14 +97,6 @@ export class ModuleEngine {
     #forceTicks = new Map();
     #orderedSignal;
     #baseUrl;
-    // Cards for Base settings that aren't SideCar/Embedding (hardcoded below,
-    // engine-owned) and aren't a module (host.services/host.data-reached) — see
-    // addBaseCard()'s own doc comment. Rendered fresh on EVERY mount() call, same
-    // as the hardcoded SideCar/Embedding cards just above them — mount() can run
-    // more than once (the drawer, and separately the full-screen panel's own
-    // skeleton), each building its own independent DOM tree against the same
-    // underlying, already-shared state (see mount()'s own doc comment).
-    #baseCards = [];
 
     /**
      * `baseUrl` (the extension's own root, e.g. `new URL('.', import.meta.url).href`
@@ -379,29 +371,6 @@ export class ModuleEngine {
         this.#moduleUpdateInfo.update(map => { if (!(id in map)) return map; const next = { ...map }; delete next[id]; return next; });
     }
 
-    /**
-     * Generic extension point for a "Base settings" card that is neither
-     * SideCar/Embedding (hardcoded, engine-owned) nor a module — for an
-     * independent core service like `LorebookService` (see MODULES.md's
-     * "Independent core services" section) that still deserves a first-class
-     * spot next to SideCar Manager rather than being buried in a module card or
-     * invisible entirely. The engine has NO built-in knowledge of what it's
-     * rendering — the same "no per-service special-casing" principle
-     * `host.services` already follows for inter-module services — it only owns
-     * WHERE the card sits and its own collapsed/open persistence, keyed by
-     * `key` (must be stable and unique — used as the layout().collapsed key).
-     * `render(container, toast)` is called exactly like a module's own render(),
-     * fresh on every mount() call.
-     *
-     * Call this before OR after mount() — a card added after mount() already ran
-     * is simply picked up the next time mount() runs again (the full-screen
-     * panel's own second call, if nothing else); it does not retroactively
-     * appear in an already-built tree.
-     */
-    addBaseCard({ key, title, description, render }) {
-        this.#baseCards.push({ key, title, description, render });
-    }
-
     layout() {
         const layout = this.settings().layout ??= { moduleOrder: [], collapsed: {} };
         layout.moduleOrder ??= [];
@@ -499,18 +468,6 @@ export class ModuleEngine {
         embeddingCard.append(embeddingHeader, embeddingContent);
         this.sidecar.embedding.render(embeddingContent, (level, message, title) => this.#toast(level, message, title));
         baseList.append(embeddingCard);
-
-        // Cards registered via addBaseCard() — see that method's own doc comment.
-        for (const card of this.#baseCards) {
-            const cardEl = h('details', { class: 'stme-base-card', open: !this.layout().collapsed[card.key] });
-            cardEl.addEventListener('toggle', () => { this.layout().collapsed[card.key] = !cardEl.open; this.saveSettings(); });
-            const header = h('summary', { class: 'stme-module-header' },
-                h('div', {}, h('strong', {}, card.title), h('small', {}, card.description ?? '')));
-            const content = h('div', {});
-            cardEl.append(header, content);
-            card.render(content, (level, message, title) => this.#toast(level, message, title));
-            baseList.append(cardEl);
-        }
 
         // Not a module, not nested in either list above — a floating window
         // toggled from one button at the very bottom of the whole drawer, so it
