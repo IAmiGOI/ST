@@ -73,9 +73,10 @@ nothing runs, requests a model, or does background work until you turn it on.
 
 ## What's in the box
 
-Six modules ship built in. Only **Notebook** is on by default; the rest are
-opt-in because they either need a model configured first, or are niche
-enough that most people don't want them running unasked.
+Seven modules ship built in. Only **Notebook** is on by default; the rest are
+opt-in because they either need a model configured first, register a new tool
+for the character LLM, or are niche enough that most people don't want them
+running unasked.
 
 | Module | On by default? | What it does |
 |---|---|---|
@@ -85,6 +86,7 @@ enough that most people don't want them running unasked.
 | **Music** | ⬜ no | A local audio player that picks tracks by scene — tag your files with keys like `combat`/`tavern`/`night`, and it classifies each new scene and plays a fitting, non-repeating track. |
 | **Macros** | ⬜ no | Define your own `{{macro}}` values — a fixed line of text, or a tiny sandboxed program that computes something from other modules' live data. |
 | **Post-Turn Processor** | ⬜ no | Runs each fresh reply through a chain of independent rewrite passes (own instruction, own model profile, optional chat context per pass) and replaces the message with the final result — with a per-message toggle to see exactly what each pass changed. |
+| **Dice** | ⬜ no | Rolls tabletop dice (presets, pools, or notation like `2d6`) from the UI or a function tool the character LLM can call — other modules can also push a quick roll into view or pull a roll on demand. |
 
 Each one is a card in the drawer: a toggle, its own settings, and (for
 Tracker and Music) an optional floating window you can drag around
@@ -142,6 +144,7 @@ flowchart TB
     Music -.registers.-> Engine
     Macros -.registers.-> Engine
     PostTurn["Post-Turn Processor"] -.registers.-> Engine
+    Dice -.registers.-> Engine
     Engine --> Bus["Shared data bus"]
     Engine --> SideCar["Shared SideCar\n(the model connection)"]
     Engine --> DevPanel["Dev panel\n(diagnostics, opt-in)"]

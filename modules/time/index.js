@@ -166,7 +166,7 @@ function getCurrentTime(context, settings, beforeIndex = Infinity) {
 
 export const timeModule = {
     id: 'time', title: 'RP Time', description: 'Asks SideCar for the in-world time after each reply and appends it.',
-    about: 'Keeps an in-story clock (day, time, morning/evening) that moves forward on its own as the story goes on, and shows it under each message — like a subtitle telling you what time it is in the scene.',
+    about: 'Keeps an in-story clock (day, time, morning/evening) that moves forward on its own as the story goes on, and shows it under each message — like a subtitle telling you what time it is in the scene. The current time is also available anywhere as {{rp_time}}, and inside the Macros module as get "time:current".',
     defaultEnabled: false,
     version: '1.0.0',
     repo: 'https://github.com/IAmiGOI/ST/tree/main/modules/time',
@@ -176,7 +176,7 @@ export const timeModule = {
         const warn = (...args) => console.warn('[STME:time]', ...args);
         let running = false;
 
-        // The only sanctioned way another module reads RP Time's current value — see
+        // The programmatic way another module reads RP Time's current value — see
         // MODULES.md's host.services section (the same request/provider pattern
         // Tracker's own track()/classify() service already uses). A consumer checks
         // host.services.isAvailable('time') first (false while this module is
@@ -185,6 +185,34 @@ export const timeModule = {
         host.services.register('time', {
             getCurrent: () => getCurrentTime(host.context(), host.moduleSettings(TIME_DEFAULTS)),
         });
+
+        // The bus/macro half — this was genuinely missing before: RP Time never
+        // called host.data.reserve()/set() at all, so it had no real ST {{macro}}
+        // (unlike Tracker's per-field ones) and, separately, Macros' own mini-
+        // language couldn't read it either (`get "time:current"` needs a plain bus
+        // value — host.data.read()/get() are NOT compute()-aware, only the real ST
+        // macro handler is; see core/data-bus.js's #registerMacro).
+        //
+        // `compute` powers the real {{rp_time}} macro: called fresh on every
+        // resolution, so it can NEVER show a stale value even mid-reroll (the exact
+        // failure mode getCurrentTime()'s own doc comment above exists to avoid) —
+        // there's nothing to keep in sync, it just re-scans context.chat live, same
+        // as any other read of "the current time" in this module.
+        //
+        // publishCurrentTime() (below) additionally calls a plain set() on every
+        // real update, purely for host.data.read()/get()/subscribe() consumers
+        // (Macros' get "time:current", a future HUD, etc.) — those never see
+        // compute(), only the last value actually set(). Same event-driven lag every
+        // other producer module's bus values already have around their own trigger
+        // event; nothing here claims otherwise.
+        host.data.reserve('current', {
+            name: 'RP Time — current',
+            schema: { type: 'string' },
+            macro: 'rp_time',
+            compute: () => getCurrentTime(host.context(), host.moduleSettings(TIME_DEFAULTS)),
+        });
+        const publishCurrentTime = () => host.data.set('current', getCurrentTime(host.context(), host.moduleSettings(TIME_DEFAULTS)));
+        publishCurrentTime(); // full current state right away — see MODULES.md's "a producer publishes, it doesn't just notify"
 
         // Fires once per real reply, AFTER it exists — not at GENERATION_STARTED any
         // more. An earlier version started the SideCar request in parallel with
@@ -227,6 +255,7 @@ export const timeModule = {
                 if (!appendTime(resolved.message, result, settings)) throw new Error('SideCar returned no usable time label.');
                 log(`Applying time label "${resolved.message.extra[TIME_EXTRA_KEY]}" to message #${resolved.index}.`);
                 updateMessage(context, resolved.index, resolved.message);
+                publishCurrentTime();
                 setTimeout(() => {
                     const target = document.querySelector(`.mes[mesid="${resolved.message.mesid ?? resolved.index}"] .mes_text, #chat .mes[mesid="${resolved.message.mesid ?? resolved.index}"] .mes_text`);
                     if (!target) warn(`Badge DOM target not found for mesid ${resolved.message.mesid ?? resolved.index} — badge was not appended to the chat.`);
@@ -240,6 +269,10 @@ export const timeModule = {
             let count = 0;
             (context.chat ?? []).forEach((message, index) => { if (message.extra?.[TIME_EXTRA_KEY]) { count++; renderBadge(message.mesid ?? index, message.extra[TIME_EXTRA_KEY]); } });
             log(`refreshBadges: re-applied ${count} existing time label(s) after a chat change.`);
+            // A different chat has its own timeline — republish so a plain bus read
+            // (Macros' get "time:current", any future subscriber) reflects the NEW
+            // chat's current time immediately, not the previous chat's last value.
+            publishCurrentTime();
         };
         const changed = host.onChatChanged(refreshBadges);
         log('activate() complete.');

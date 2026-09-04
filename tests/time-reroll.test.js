@@ -48,6 +48,17 @@ function makeHost(chat) {
         saveModuleSettings: () => {},
         toast: () => {},
         services: { register() {}, unregister() {}, isAvailable: () => false, get: () => undefined, request: () => ({}), ask: async () => undefined },
+        // Minimal fake, real enough for activate()'s reserve()/set() calls (the
+        // {{rp_time}} macro + bus export) not to throw — this file's own tests are
+        // about the reroll/rollback logic, not the bus wiring, which
+        // time-module.test.js covers separately with the real ModuleEngine+bus.
+        data: {
+            reserve: () => ({ unreserve() {} }),
+            set() {},
+            get: (_key, fallback) => fallback,
+            read: (_namespace, _key, fallback) => fallback,
+            subscribe: () => () => {},
+        },
     };
     return { host, listeners };
 }

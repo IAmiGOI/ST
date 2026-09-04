@@ -11,6 +11,7 @@ import { trackerModule } from './modules/tracker/index.js';
 import { musicModule } from './modules/music/index.js';
 import { macrosModule } from './modules/macros/index.js';
 import { postprocessModule } from './modules/postprocess/index.js';
+import { diceModule } from './modules/dice/index.js';
 
 // See core/self-update.js — needs this exact script's own URL, which only index.js
 // (the real entry point ST imports) can supply via import.meta.url.
@@ -168,6 +169,7 @@ async function init() {
     engine.register(musicModule);
     engine.register(macrosModule);
     engine.register(postprocessModule);
+    engine.register(diceModule);
     await engine.start();
 
     const target = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
@@ -193,7 +195,7 @@ async function init() {
     window.STModuleEngine = engine;
     window.STModuleEngineLorebook = lorebook;
     window.STModuleEngineBrowser = browserPanel;
-    console.info('[ST Module Engine] Started with Notebook, RP Time, Tracker, Music, Macros and Post-Turn Processor modules, plus the independent Lorebook service.');
+    console.info('[ST Module Engine] Started with Notebook, RP Time, Tracker, Music, Macros, Post-Turn Processor and Dice modules, plus the independent Lorebook service.');
 }
 
 /**
