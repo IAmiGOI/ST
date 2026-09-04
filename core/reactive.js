@@ -55,8 +55,7 @@ export function effect(fn) {
 /** A read-only signal derived from other signals. Recomputes eagerly when a dependency changes. */
 export function computed(fn) {
     const result = signal(undefined);
-    let first = true;
-    const dispose = effect(() => { const value = fn(); if (first) { result.set(value); first = false; } else result.set(value); });
+    const dispose = effect(() => result.set(fn()));
     const read = () => result();
     read.isSignal = true;
     read.peek = result.peek;

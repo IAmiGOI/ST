@@ -1,5 +1,5 @@
 import { createNotebookStore } from './store.js';
-import { h, list, signal, computed, onDispose, Field, TextInput, TextArea, Button } from '../../core/widgets.js';
+import { h, list, signal, computed, onDispose, TextInput, TextArea, Button, SliderField } from '../../core/widgets.js';
 
 const TOOL_NAME = 'Notebook';
 const PROMPT_KEY = 'stme_notebook_context';
@@ -106,10 +106,20 @@ export const notebookModule = {
         const cleanupBatch = signal(settings().cleanupBatch);
         const injectionDepth = signal(settings().injectionDepth);
 
+        // Sliders instead of bare number inputs — same compact widget SideCar's own
+        // sampler settings and Post-Turn Processor's context depth already use,
+        // replacing three full-width label+input rows with a live numeric readout
+        // per row. Cleanup batch's own max tracks maxNotes live (a signal prop stays
+        // live on its own, same as any other h() attribute) — store.js's own
+        // setSettings() already clamps cleanupBatch <= maxNotes on save, so letting
+        // the slider's visible range silently disagree with that real constraint
+        // would just be a confusing "why did my value change on save" surprise.
         const settingsForm = h('div', { class: 'stme-note-settings' },
-            Field('Maximum notes', TextInput(maxNotes, { type: 'number' })),
-            Field('Cleanup batch', TextInput(cleanupBatch, { type: 'number' })),
-            Field('Injection depth (@X)', TextInput(injectionDepth, { type: 'number' })),
+            h('div', { class: 'stme-sampler-grid' },
+                SliderField('Maximum notes', maxNotes, { min: 1, max: 500, step: 1 }),
+                SliderField('Cleanup batch', cleanupBatch, { min: 1, max: computed(() => Math.max(1, maxNotes())), step: 1 }),
+                SliderField('Injection depth (@X)', injectionDepth, { min: 0, max: 100, step: 1 }),
+            ),
             Button('Save settings', () => {
                 const next = store.setSettings({ maxNotes: maxNotes.peek(), cleanupBatch: cleanupBatch.peek(), injectionDepth: injectionDepth.peek() });
                 maxNotes.set(next.maxNotes); cleanupBatch.set(next.cleanupBatch); injectionDepth.set(next.injectionDepth);
@@ -143,6 +153,16 @@ export const notebookModule = {
                 h('summary', {},
                     h('strong', {}, note.title),
                     note.timestamp ? h('span', { class: 'stme-note-timestamp' }, note.timestamp) : null,
+                    Button('×', event => {
+                        // Same stopPropagation Tracker's own field-row remove button uses —
+                        // without it, clicking × also toggles this <details> open/closed,
+                        // since the click bubbles up to <summary>'s own native behavior.
+                        event.preventDefault(); event.stopPropagation();
+                        if (!store.remove(note.id)) return;
+                        sync();
+                        host.setPrompt(PROMPT_KEY, store.prompt(), 1, store.settings().injectionDepth, 0);
+                        host.toast('success', `Deleted "${note.title}".`);
+                    }, { variant: 'danger' }),
                 ),
                 h('div', {}, note.content),
             )),

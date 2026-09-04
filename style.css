@@ -54,19 +54,20 @@
 .stme-settings .stme-module-content, .stme-settings .stme-module-error { border-radius: 0 0 var(--stme-radius-card) var(--stme-radius-card); }
 .stme-settings .stme-module-content { padding: 10px; }
 .stme-settings .stme-note-settings { padding-bottom: 8px; border-bottom: 1px solid var(--SmartThemeBorderColor); }
-.stme-settings .stme-note-settings label { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.stme-settings .stme-note-settings input { width: 90px; }
 .stme-settings .stme-note-editor { margin-top: 10px; }
 /* A note is a <details> now (collapsed by default) — only its <summary> (title +
-   RP Time timestamp, if any) shows until clicked open, so a long note list doesn't
-   mean scrolling past every note's full text just to find one. */
+   RP Time timestamp, if any, + a delete button) shows until clicked open, so a long
+   note list doesn't mean scrolling past every note's full text just to find one. */
 .stme-settings .stme-note { border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius-sm); background: var(--SmartThemeBlurTintColor); overflow-wrap: anywhere; }
-.stme-settings .stme-note > summary { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; cursor: pointer; list-style: none; }
+.stme-settings .stme-note > summary { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; list-style: none; }
 .stme-settings .stme-note > summary::-webkit-details-marker { display: none; }
 .stme-settings .stme-note > summary::after { content: '⌄'; margin-left: auto; opacity: .6; transition: transform .15s ease; }
 .stme-settings .stme-note:not([open]) > summary::after { transform: rotate(-90deg); }
 .stme-settings .stme-note-timestamp { flex-shrink: 0; opacity: .6; font-size: .82em; font-variant-numeric: tabular-nums; }
-.stme-settings .stme-note > div { padding: 0 10px 8px; white-space: pre-wrap; opacity: .9; }
+.stme-settings .stme-note > summary .stme-worker-remove { flex-shrink: 0; padding: 0 8px; }
+/* Capped height + its own scrollbar for a genuinely long note, instead of the whole
+   card ballooning to fit it — the actual "huge field" the note list used to become. */
+.stme-settings .stme-note > div { padding: 0 10px 8px; white-space: pre-wrap; opacity: .9; max-height: 240px; overflow-y: auto; }
 .stme-settings .stme-sidecar { margin: 10px 0; border: 1px solid var(--SmartThemeBorderColor); border-radius: var(--stme-radius); overflow: hidden; }
 .stme-settings .stme-sidecar > header { padding: 9px 10px; background: var(--SmartThemeBlurTintColor); }
 .stme-settings .stme-sidecar header small { display: block; margin-top: 3px; opacity: .7; }

@@ -99,6 +99,15 @@ export function createNotebookStore(context) {
             save();
             return { ...note, removed };
         },
+        /** Removes one note by id. Returns true if a note was actually found and removed, false for an unknown id (never throws — a delete button clicked twice, or on an already-gone note, is a no-op). */
+        remove(id) {
+            const list = notes();
+            const index = list.findIndex(item => item.id === id);
+            if (index < 0) return false;
+            list.splice(index, 1);
+            save();
+            return true;
+        },
         update(id, title, content, timestamp) {
             const note = notes().find(item => item.id === id);
             if (!note) throw new Error(`Note ${id} was not found.`);

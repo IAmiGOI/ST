@@ -27,6 +27,29 @@ test('Notebook removes the configured oldest batch when capacity is reached', ()
     assert.deepEqual(store.notes().map(note => note.title), ['Third']);
 });
 
+test('remove() deletes exactly the targeted note, leaving the others and their order untouched', () => {
+    const { store, state } = makeStore();
+    const first = store.add('First', 'a');
+    const second = store.add('Second', 'b');
+    const third = store.add('Third', 'c');
+    const savesBefore = state.saves;
+
+    assert.equal(store.remove(second.id), true);
+
+    assert.deepEqual(store.notes().map(note => note.id), [first.id, third.id]);
+    assert.ok(state.saves > savesBefore, 'a real removal must persist');
+});
+
+test('remove() is a no-op — returns false, never throws, does not save — for an id that does not exist', () => {
+    const { store, state } = makeStore();
+    store.add('Only', 'content');
+    const savesBefore = state.saves;
+
+    assert.equal(store.remove('note_does_not_exist'), false);
+    assert.equal(store.notes().length, 1);
+    assert.equal(state.saves, savesBefore, 'a no-op removal must not trigger a save');
+});
+
 test('Notebook updates a note and rejects empty values', () => {
     const { store } = makeStore();
     const note = store.add('Before', 'content');

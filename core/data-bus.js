@@ -142,7 +142,28 @@ export class ModuleDataBus {
     reserve(namespace, key, { name, schema, allowExternalWrite = false, macro, compute, webhook, persist = false } = {}) {
         const id = this.#id(namespace, key);
         const existing = this.#channels.get(id);
-        if (existing?.macro && existing.macro !== macro) this.#unregisterMacro(existing.macro);
+        // Two related bugs, both fixed by the same ownership check:
+        //  1. Unregistering the OLD macro name from ST (below) is not the same as
+        //     freeing it in #macros, the map reserve()'s own collision check reads a
+        //     few lines down. Without also deleting it here, a channel that renames
+        //     its macro (or gets unreserve()d — see #unreserve() below) leaves a
+        //     stale entry pointing at an id that no longer owns that name —
+        //     permanently blocking any OTHER channel from ever claiming it.
+        //  2. `existing.macro` is set on a channel EVEN WHEN it lost a collision
+        //     (channel.macro is assigned unconditionally below, before the
+        //     collision check runs) — so unregistering it unconditionally here would
+        //     rip out a DIFFERENT channel's real, legitimately-held ST registration
+        //     whenever the collision-losing channel later renames or unreserves.
+        //     `this.#macros.get(existing.macro) === id` is the actual "do I still
+        //     hold this name" check; only then is there anything real to release.
+        // Confirmed live both ways: renaming/removing a Tracker field whose macro
+        // slug is reused elsewhere used to permanently block the new claimant AND,
+        // separately, tearing down a channel that had merely LOST a name collision
+        // used to silently unregister the winner's own working macro.
+        if (existing?.macro && existing.macro !== macro && this.#macros.get(existing.macro) === id) {
+            this.#unregisterMacro(existing.macro);
+            this.#macros.delete(existing.macro);
+        }
         if (existing?.webhook) this.#stopPulling(id);
 
         const channel = { namespace, key, name, schema, allowExternalWrite, macro, compute, webhook, persist, ownerId: namespace };
@@ -174,7 +195,14 @@ export class ModuleDataBus {
     #unreserve(id) {
         const channel = this.#channels.get(id);
         if (!channel) return;
-        if (channel.macro) this.#unregisterMacro(channel.macro);
+        // Same ownership check as the rename case in reserve() above, and for the
+        // same two reasons: freeing #macros so the name can be reclaimed, AND never
+        // unregistering a DIFFERENT channel's real macro just because this one
+        // happened to store the same name after losing a collision for it.
+        if (channel.macro && this.#macros.get(channel.macro) === id) {
+            this.#unregisterMacro(channel.macro);
+            this.#macros.delete(channel.macro);
+        }
         this.#stopPulling(id);
         this.#channels.delete(id);
         // A channel being retired means "this no longer exists" — its last value must not

@@ -39,7 +39,7 @@ export function createFullScreenPanel(engine) {
     const body = h('div', { class: 'stme-fullscreen-body' });
     const head = h('div', { class: 'stme-fullscreen-head' },
         h('strong', {}, 'ST Module Engine'),
-        Toggle('Hide ST top bar while open', hideTopBar, { onChange: checked => hideTopBar.set(checked) }),
+        Toggle('Hide ST top bar while open', hideTopBar),
         Button('× Close', () => visible.set(false)),
     );
     panel.append(head, body);

@@ -154,6 +154,58 @@ test('macro: a colliding macro name is rejected for the second channel, first ke
     assert.equal(registered.get('state')(), 'Healthy');
 });
 
+// --- Regression: unreserve()/a macro rename used to leave a stale entry in the
+// bus's own internal macro-collision map forever, even though ST's real macro
+// registration was correctly torn down — silently blocking ANY other channel from
+// ever claiming that name again. Neither scenario below is hypothetical: the first
+// is exactly what happens when a Tracker field is removed and a later field (on
+// the same or a different block) reuses its macro slug; the second is exactly
+// what happens when a user renames a macro's {{name}} in the Macros module and a
+// different program later reuses the old one.
+
+test('macro: unreserve() fully frees the macro name — a DIFFERENT channel can claim it afterward', () => {
+    const reports = [];
+    const registered = new Map();
+    const context = { registerMacro: (name, handler) => registered.set(name, handler), unregisterMacro: name => registered.delete(name) };
+    const bus = new ModuleDataBus({ getContext: () => context, onContaminate: report => reports.push(report) });
+
+    bus.reserve('tracker', 'field:b1:health', { macro: 'tracker_vitals_health' });
+    bus.unreserve('tracker', 'field:b1:health');
+    bus.reserve('tracker', 'field:b2:health', { macro: 'tracker_vitals_health' });
+
+    assert.equal(reports.some(report => report.type === 'macro-collision'), false, 'the name was freed by unreserve() — this must not be treated as a collision');
+    bus.set('tracker', 'field:b2:health', '30');
+    assert.equal(registered.get('tracker_vitals_health')(), '30', 'the NEW channel must actually own the macro now');
+});
+
+test('macro: reserving the SAME channel under a new macro name frees the old one for someone else', () => {
+    const reports = [];
+    const registered = new Map();
+    const context = { registerMacro: (name, handler) => registered.set(name, handler), unregisterMacro: name => registered.delete(name) };
+    const bus = new ModuleDataBus({ getContext: () => context, onContaminate: report => reports.push(report) });
+
+    bus.reserve('macros', 'm1', { macro: 'hp_total' });
+    bus.reserve('macros', 'm1', { macro: 'total_hp' }); // renamed
+    bus.reserve('macros', 'm2', { macro: 'hp_total' }); // a different program reuses the abandoned name
+
+    assert.equal(reports.some(report => report.type === 'macro-collision'), false);
+    bus.set('macros', 'm2', 'x');
+    assert.equal(registered.get('hp_total')(), 'x');
+});
+
+test('macro: unreserve() does NOT free a name still owned by a different, still-reserved channel (no accidental over-deletion)', () => {
+    const registered = new Map();
+    const context = { registerMacro: (name, handler) => registered.set(name, handler), unregisterMacro: name => registered.delete(name) };
+    const bus = new ModuleDataBus({ getContext: () => context });
+
+    bus.reserve('tracker', 'field:b1:health', { macro: 'shared_name' }); // rejected collision — never actually owns it
+    bus.reserve('time', 'clock', { macro: 'shared_name' }); // first-come, keeps it... wait, tracker was first
+    bus.unreserve('time', 'clock'); // the loser of the collision unreserves — must not touch the winner's registration
+
+    bus.set('tracker', 'field:b1:health', 'Healthy');
+    assert.equal(registered.get('shared_name')(), 'Healthy', 'the original winner\'s macro must still resolve after an unrelated channel that never actually held the name is unreserved');
+});
+
 function makeContextWithMetadata() {
     const state = { chatMetadata: {}, saves: 0 };
     state.context = { chatMetadata: state.chatMetadata, saveMetadataDebounced: () => state.saves++ };

@@ -56,12 +56,28 @@ export class ModuleEngine {
     #modules = new Map();
     #active = new Map();
     #subscriptions = [];
-    #chatListeners = new Set();
+    // Map, not Set — a listener's owning module id, so disable() can sweep up one
+    // that a module's own cleanup() forgot to unsubscribe (the same belt-and-
+    // suspenders every other host API already gets: releaseNamespace() for the bus,
+    // the ownerId sweep below for services). Without this, a badly-written module
+    // (built-in or, more realistically, a third-party one loaded via the Module
+    // Loader) leaks a listener holding a stale `host` closure that keeps firing on
+    // every future chat switch forever, for the rest of the page's life.
+    #chatListeners = new Map();
+    // moduleId -> Set<{ eventName, guarded }> — same reasoning as #chatListeners,
+    // for host.onEvent()'s direct context.eventSource subscriptions. A listener
+    // still removed here the moment its own returned unsubscribe runs (see
+    // #hostFor's onEvent below) — this is purely the safety net for one that never does.
+    #eventSubscriptions = new Map();
     #root;
     #logs = [];
     #data;
     #moduleStyles = new Map();
     #services = new Map();
+    // name -> moduleId, for registerTool()'s own collision guard below — mirrors
+    // #services' ownerId tracking; ST's registerFunctionTool/unregisterFunctionTool
+    // themselves have no concept of ownership at all.
+    #toolOwners = new Map();
     #chatChangedDispatching = false;
     #chatChangedBurst = [];
     #chatChangedStormLoggedAt = 0;
@@ -248,7 +264,7 @@ export class ModuleEngine {
         console.info(`[STME:engine] CHAT_CHANGED dispatch starting — ${this.#chatListeners.size} listener(s).`);
         try {
             let index = 0;
-            for (const listener of [...this.#chatListeners]) {
+            for (const listener of [...this.#chatListeners.keys()]) {
                 index++;
                 const listenerStart = Date.now();
                 try {
@@ -305,6 +321,26 @@ export class ModuleEngine {
         // Same for any service this module registered (e.g. Tracker's 'tracker' service) —
         // a module that stops providing a service should stop being found by others.
         for (const [name, entry] of [...this.#services.entries()]) if (entry.ownerId === id) this.#services.delete(name);
+        // Same for a forgotten host.onChatChanged() unsubscribe — a listener left
+        // behind here would otherwise keep firing (with a now-stale `host` closure)
+        // on every future chat switch for the rest of the page's life.
+        for (const [listener, ownerId] of [...this.#chatListeners.entries()]) if (ownerId === id) this.#chatListeners.delete(listener);
+        // Same for a forgotten host.onEvent() unsubscribe — these subscribe directly
+        // to ST's own context.eventSource, so a leaked one keeps firing against a
+        // disabled module's stale closure until the page itself reloads.
+        const eventSubs = this.#eventSubscriptions.get(id);
+        if (eventSubs?.size) {
+            const context = this.getContext();
+            for (const { eventName, guarded } of eventSubs) context.eventSource?.off?.(eventName, guarded);
+            this.#eventSubscriptions.delete(id);
+        }
+        // Same for a forgotten host.unregisterTool() — a stale tool left registered
+        // with ST would still be callable by the character LLM after disable.
+        for (const [name, ownerId] of [...this.#toolOwners.entries()]) {
+            if (ownerId !== id) continue;
+            this.#toolOwners.delete(name);
+            this.getContext().unregisterFunctionTool?.(name);
+        }
         this.#enabledMap.update(map => ({ ...map, [id]: false }));
         this.#errorMap.update(map => { if (!(id in map)) return map; const next = { ...map }; delete next[id]; return next; });
     }
@@ -622,11 +658,33 @@ export class ModuleEngine {
             refresh: () => { this.#forceTicks.get(module.id)?.update(n => n + 1); },
             setPrompt: (key, prompt, position = 1, depth = 4, role = 0) => this.getContext().setExtensionPrompt(key, prompt, position, depth, false, role),
             registerTool: (definition) => {
+                // Refuses a name a DIFFERENT module already owns, the same collision
+                // protection host.data.reserve()'s macro names already get — without
+                // it, a second module (a typo, or two third-party modules both
+                // picking an obvious name like "Roll") would silently steal the tool
+                // name out from under the first, no warning, ST just calls whichever
+                // registered last.
+                const existingOwner = this.#toolOwners.get(definition.name);
+                if (existingOwner && existingOwner !== module.id) {
+                    console.warn(`[ST Module Engine][${module.id}] registerTool("${definition.name}") refused — already registered by "${existingOwner}".`);
+                    return;
+                }
+                this.#toolOwners.set(definition.name, module.id);
                 const context = this.getContext();
                 context.unregisterFunctionTool?.(definition.name);
                 context.registerFunctionTool?.(definition);
             },
-            unregisterTool: (name) => this.getContext().unregisterFunctionTool?.(name),
+            unregisterTool: (name) => {
+                // Only actually touches ST's real registration when THIS module is
+                // the recorded owner (or nobody is, e.g. a tool registered before
+                // this tracking existed) — same reasoning as data-bus.js's own
+                // ownership-checked unreserve() fix: calling this for a name you
+                // never actually won must not tear down a different module's tool.
+                const owner = this.#toolOwners.get(name);
+                if (owner && owner !== module.id) return;
+                this.#toolOwners.delete(name);
+                this.getContext().unregisterFunctionTool?.(name);
+            },
             toast: (level, message, title = module.title) => this.#toast(level, message, title),
             sidecar: this.sidecar.forModule(module.id),
             moduleSettings: (defaults = {}) => this.moduleSettings(module.id, defaults),
@@ -668,7 +726,19 @@ export class ModuleEngine {
              * the `track()` example.
              */
             services: Object.freeze({
-                register: (name, api) => { this.#services.set(name, { api, ownerId: module.id }); },
+                register: (name, api) => {
+                    // Refuses a name a DIFFERENT module already provides — same
+                    // collision protection as registerTool() above and
+                    // host.data.reserve()'s macro names. Re-registering your OWN
+                    // service (e.g. activate() running again after a Retry) is still
+                    // fine; only a second, different owner is refused.
+                    const existing = this.#services.get(name);
+                    if (existing && existing.ownerId !== module.id) {
+                        console.warn(`[ST Module Engine][${module.id}] services.register("${name}") refused — already provided by "${existing.ownerId}".`);
+                        return;
+                    }
+                    this.#services.set(name, { api, ownerId: module.id });
+                },
                 unregister: (name) => {
                     const entry = this.#services.get(name);
                     if (entry?.ownerId === module.id) this.#services.delete(name);
@@ -717,10 +787,18 @@ export class ModuleEngine {
                     try { const result = listener(...args); Promise.resolve(result).catch(error => this.#log('error', module.id, `Event ${eventType} failed: ${error?.message || String(error)}`, error)); return result; } catch (error) { this.#log('error', module.id, `Event ${eventType} failed: ${error?.message || String(error)}`, error); }
                 };
                 context.eventSource.on(eventName, guarded);
-                return () => context.eventSource.off?.(eventName, guarded);
+                // Recorded under this module's own id purely as a safety net — see
+                // disable()'s own sweep above. The real, expected teardown path is
+                // still the unsubscribe function returned below; this only matters
+                // when a module's cleanup() forgets to call it.
+                const record = { eventName, guarded };
+                const owned = this.#eventSubscriptions.get(module.id) ?? new Set();
+                owned.add(record);
+                this.#eventSubscriptions.set(module.id, owned);
+                return () => { context.eventSource.off?.(eventName, guarded); owned.delete(record); };
             },
             onChatChanged: (listener) => {
-                this.#chatListeners.add(listener);
+                this.#chatListeners.set(listener, module.id);
                 return () => this.#chatListeners.delete(listener);
             },
         };
